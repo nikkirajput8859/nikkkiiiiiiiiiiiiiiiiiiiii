@@ -37,7 +37,7 @@ function parseSpintax(text) {
 }
 
 function stripHtml(html) {
-    return html.replace(/<[^>]*>?/gm, '').trim();
+    return html.replace(/<[^>]*>?/gm, '').replace(/\s+/g, ' ').trim();
 }
 
 async function verifyTurnstile(token) {
@@ -79,14 +79,18 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
+    // Standard High-Inbox Connection via Port 587 (STARTTLS)
     const transporter = nodemailer.createTransport({
-        service: 'gmail',
+        host: 'smtp.gmail.com',
+        port: 587,
+        secure: false, // STARTTLS safe handshake
+        requireTLS: true,
         pool: true,
         maxConnections: 2,
         maxMessages: 100,
         auth: {
-            user: email,
-            pass: appPassword.replace(/\s+/g, '')
+            user: email.trim(),
+            pass: appPassword.replace(/\s+/g, '').trim()
         }
     });
 
@@ -103,30 +107,26 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    const BATCH_SIZE = 2; // Strict requirement: 2 emails per batch
+    const BATCH_SIZE = 2; // Strict 2-mail batch limit for safe inbox delivery
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
         const batch = recipients.slice(i, i + BATCH_SIZE);
 
-        const batchPromises = batch.map(async (recipient) => {
+        const batchPromises = batch.map(async (recipientRaw) => {
+            const recipient = recipientRaw.trim();
+            if (!recipient) return null;
+
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
             const plainText = stripHtml(dynamicBody);
-            const domain = email.split('@')[1] || 'gmail.com';
-            const uniqueMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
             const mailOptions = {
-                from: `"${senderName}" <${email}>`,
+                from: `"${senderName.replace(/["\r\n]/g, '').trim()}" <${email.trim()}>`,
                 to: recipient,
+                replyTo: email.trim(),
                 subject: dynamicSubject,
                 text: plainText,
-                html: dynamicBody,
-                headers: {
-                    'Message-ID': uniqueMsgId,
-                    'X-Mailer': 'SecureMailConsole/1.0',
-                    'X-Priority': '3',
-                    'Auto-Submitted': 'auto-generated'
-                }
+                html: dynamicBody
             };
 
             try {
@@ -140,6 +140,8 @@ app.post('/api/send-stream', async (req, res) => {
         const results = await Promise.all(batchPromises);
 
         results.forEach((resResult) => {
+            if (!resResult) return;
+
             if (resResult.success) {
                 sentCount++;
                 sendSSE({ type: 'progress', status: 'sent', recipient: resResult.recipient, sentCount, failedCount });
@@ -149,7 +151,7 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 2-second interval between batches for inbox protection
+        // 2-second safe delay between batches
         if (i + BATCH_SIZE < recipients.length) {
             await new Promise((resolve) => setTimeout(resolve, 2000));
         }
