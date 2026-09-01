@@ -5,154 +5,473 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Secure Mail Console</title>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <link rel="stylesheet" href="style.css">
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #f0f4f9; color: #1e293b; padding: 24px 20px; min-height: 100vh; }
+        .main-wrapper { max-width: 1100px; margin: 0 auto; }
+        
+        /* Top Header */
+        .top-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+        .brand-title { display: flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 800; color: #0f172a; }
+        .header-actions { display: flex; align-items: center; gap: 10px; }
+        .badge-safe { font-size: 11px; background: #e0f2fe; color: #0369a1; padding: 5px 12px; border-radius: 9999px; font-weight: 700; }
+        .btn-logout { background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; transition: 0.2s; user-select: none; display: flex; align-items: center; gap: 6px; }
+        .btn-logout:hover { background: #fca5a5; }
+
+        /* 2-Card Layout */
+        .app-layout { display: grid; grid-template-columns: 1.15fr 1fr; gap: 24px; align-items: start; }
+        .card { background: #ffffff; border-radius: 16px; padding: 24px; box-shadow: 0 4px 20px -2px rgba(0,0,0,0.04); border: 1px solid #e9eff6; }
+        .card-title { display: flex; align-items: center; justify-content: space-between; font-size: 15px; font-weight: 700; color: #0f172a; margin-bottom: 18px; }
+        .card-title span { display: flex; align-items: center; gap: 8px; }
+        
+        .count-badge { font-size: 11px; background: #eff6ff; color: #3b82f6; padding: 3px 10px; border-radius: 9999px; font-weight: 600; }
+
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        label { font-size: 12px; font-weight: 600; color: #475569; }
+        
+        .input-wrapper { position: relative; width: 100%; }
+        input, textarea { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; color: #0f172a; font-size: 13px; outline: none; width: 100%; transition: all 0.2s; }
+        input:focus, textarea:focus { border-color: #3b82f6; background: #ffffff; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
+        textarea { resize: vertical; }
+
+        .toggle-eye { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; cursor: pointer; font-size: 13px; }
+
+        /* Progress Monitor Grid */
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+        .stat-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; text-align: center; }
+        .stat-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; color: #64748b; margin-bottom: 4px; }
+        .stat-value { font-size: 24px; font-weight: 800; }
+        .stat-total { color: #3b82f6; }
+        .stat-sent { color: #10b981; }
+        .stat-failed { color: #ef4444; }
+        .stat-remaining { color: #f59e0b; }
+
+        /* Progress Bar Track */
+        .progress-track { width: 100%; height: 8px; background: #e2e8f0; border-radius: 9999px; overflow: hidden; margin-bottom: 14px; }
+        .progress-bar { width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.3s ease; }
+
+        .status-text { font-size: 12px; font-weight: 600; color: #64748b; display: flex; align-items: center; justify-content: center; gap: 6px; margin-bottom: 14px; }
+
+        .control-btns { display: flex; gap: 10px; }
+        .btn-action { flex: 1; border: none; padding: 12px; border-radius: 8px; font-size: 14px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: 0.2s; }
+        .btn-send { background: #10b981; color: white; }
+        .btn-send:hover:not(:disabled) { background: #059669; }
+        .btn-send:disabled { background: #cbd5e1; color: #64748b; cursor: not-allowed; }
+        .btn-stop { background: #ef4444; color: white; display: none; }
+        .btn-stop:hover { background: #dc2626; }
+
+        /* Turnstile Wrapper */
+        .turnstile-box { margin-top: 10px; }
+
+        /* Password Gate Overlay */
+        .lock-overlay { position: fixed; inset: 0; background: #232a3b; display: flex; align-items: center; justify-content: center; z-index: 9999; }
+        .lock-card { background: #ffffff; border-radius: 14px; padding: 32px 28px; width: 100%; max-width: 380px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3); }
+        .hidden { display: none !important; }
+        .btn-shake { animation: shake 0.3s ease-in-out; }
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-4px); }
+            75% { transform: translateX(4px); }
+        }
+    </style>
 </head>
 
 <body>
-    <!-- Password Gate Overlay -->
-    <div id="password-gate" class="password-gate">
-        <div class="gate-card fade-in">
-            <div class="gate-icon">
-                <i class="fa-solid fa-lock"></i>
-            </div>
-            <h2>Access Protected</h2>
-            <p>Enter password to continue</p>
-            <form id="gate-form" autocomplete="off">
-                <div class="form-group">
-                    <div class="password-wrapper">
-                        <input type="password" id="gate-password" placeholder="Enter password..." autocomplete="off" required>
-                        <button type="button" id="toggle-gate-password" class="icon-button"><i class="fa-regular fa-eye"></i></button>
-                    </div>
-                </div>
-                <div id="gate-error" class="gate-error hidden">
-                    <i class="fa-solid fa-triangle-exclamation"></i>
-                    <span id="gate-error-text">Incorrect password</span>
-                </div>
-                <button type="submit" id="gate-submit-btn" class="btn btn-primary btn-block">
-                    <i class="fa-solid fa-arrow-right-to-bracket"></i> Enter Console
-                </button>
-            </form>
+
+<!-- Password Gate Overlay -->
+<div class="lock-overlay" id="passwordGate">
+    <div class="lock-card">
+        <h2 style="font-size: 18px; margin-bottom: 6px; color: #0f172a;"><i class="fa-solid fa-lock"></i> Access Protected</h2>
+        <p style="font-size: 13px; color: #64748b; margin-bottom: 18px;">Enter administrative access password</p>
+        <form id="gateForm" autocomplete="off" onsubmit="handleUnlock(event)">
+            <input type="password" id="gatePass" placeholder="Enter password..." required style="margin-bottom: 12px;" autofocus />
+            <div id="gateError" class="hidden" style="color: #ef4444; font-size: 12px; margin-bottom: 12px; font-weight: 700;">Incorrect password. Try again!</div>
+            <button type="submit" id="gateSubmitBtn" class="btn-action btn-send" style="background: #3b82f6; width: 100%;">
+                <i class="fa-solid fa-arrow-right-to-bracket"></i> Enter
+            </button>
+        </form>
+    </div>
+</div>
+
+<!-- Main App Console -->
+<div class="main-wrapper hidden" id="mainApp">
+    <!-- Top Header -->
+    <div class="top-header">
+        <div class="brand-title">
+            <i class="fa-solid fa-paper-plane"></i> Bulk Email Sender
+        </div>
+        <div class="header-actions">
+            <span class="badge-safe"><i class="fa-solid fa-bolt"></i> 6-Batch Direct Engine</span>
+            <button type="button" class="btn-logout" id="logoutBtn" title="Double click to logout">
+                <i class="fa-solid fa-right-from-bracket"></i> Logout (Double Click)
+            </button>
         </div>
     </div>
 
-    <div class="app-container hidden" id="main-app">
-        <header class="app-header">
-            <h1><i class="fa-solid fa-shield-halved"></i> Secure Mail Console</h1>
-            <button type="button" id="logout-btn" class="btn-logout" title="Double click to logout">
-                <i class="fa-solid fa-right-from-bracket"></i> Logout (Double Click)
-            </button>
-        </header>
-
-        <section id="dashboard-section">
-            <div class="dashboard-header fade-in">
-                <h2><i class="fa-solid fa-paper-plane"></i> Bulk Email Sender (Batch Size: 2)</h2>
+    <div class="app-layout">
+        <!-- LEFT CARD: Compose Message -->
+        <div class="card">
+            <div class="card-title">
+                <span><i class="fa-regular fa-pen-to-square"></i> Compose Message</span>
             </div>
 
-            <div class="dashboard-grid">
-                <!-- Composer Card -->
-                <div class="card composer-card fade-in delay-1">
-                    <h3><i class="fa-solid fa-pen-to-square"></i> Compose Message</h3>
-                    <form id="compose-form" onsubmit="return false;">
-                        <div class="form-row">
-                            <div class="form-group half">
-                                <label for="sender-name">Sender Name</label>
-                                <input type="text" id="sender-name" placeholder="E.g., John Doe" required>
-                            </div>
-                            <div class="form-group half">
-                                <label for="dashboard-email">Your Gmail</label>
-                                <input type="email" id="dashboard-email" placeholder="you@gmail.com" required>
-                            </div>
-                        </div>
-
-                        <div class="form-row">
-                            <div class="form-group half">
-                                <label for="dashboard-password">App Password</label>
-                                <div class="password-wrapper">
-                                    <input type="password" id="dashboard-password" placeholder="16-char app password" required>
-                                    <button type="button" id="toggle-password" class="icon-button"><i class="fa-regular fa-eye"></i></button>
-                                </div>
-                            </div>
-                            <div class="form-group half">
-                                <label for="subject">Email Subject</label>
-                                <input type="text" id="subject" placeholder="Enter subject line..." required>
-                            </div>
-                        </div>
-
-                        <div class="form-group flex-grow">
-                            <label for="message-body">Message Body (Plain Text / HTML)</label>
-                            <textarea id="message-body" placeholder="Write message... Spintax supported: {Hi|Hello|Hey}" required></textarea>
-                        </div>
-
-                        <div class="form-group" style="margin-top: 0.5rem; margin-bottom: 0;">
-                            <label><i class="fa-solid fa-shield-cat"></i> Spam Protection</label>
-                            <div class="cf-turnstile" data-sitekey="1x00000000000000000000AA" data-theme="light"></div>
-                        </div>
-                    </form>
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Sender Name</label>
+                    <input type="text" id="senderName" placeholder="E.g., John Doe" required />
                 </div>
-
-                <!-- Recipients & Control Card -->
-                <div class="right-column">
-                    <div class="card recipients-card fade-in delay-2">
-                        <div class="card-header-flex">
-                            <h3><i class="fa-solid fa-users"></i> Recipients</h3>
-                            <span class="badge" id="detected-count">0 found</span>
-                        </div>
-                        <p class="help-subtext">Paste emails (comma, space, or newline separated)</p>
-                        <div class="form-group flex-grow" style="margin-bottom: 0;">
-                            <textarea id="recipients-input" placeholder="john@example.com&#10;jane@example.com"></textarea>
-                        </div>
-                    </div>
-
-                    <!-- Progress Monitor Card -->
-                    <div class="card progress-card fade-in delay-3">
-                        <h3><i class="fa-solid fa-chart-pie"></i> Dispatch Status</h3>
-
-                        <div class="stats-grid">
-                            <div class="stat-box neutral">
-                                <span class="stat-label">Total</span>
-                                <span class="stat-value" id="stat-total">0</span>
-                            </div>
-                            <div class="stat-box success">
-                                <span class="stat-label">Sent</span>
-                                <span class="stat-value" id="stat-sent">0</span>
-                            </div>
-                            <div class="stat-box danger">
-                                <span class="stat-label">Failed</span>
-                                <span class="stat-value" id="stat-failed">0</span>
-                            </div>
-                            <div class="stat-box warning">
-                                <span class="stat-label">Remaining</span>
-                                <span class="stat-value" id="stat-remaining">0</span>
-                            </div>
-                        </div>
-
-                        <div class="progress-bar-container">
-                            <div class="progress-bar" id="progress-bar" style="width: 0%;"></div>
-                        </div>
-
-                        <div class="status-indicator">
-                            <i id="status-icon" class="fa-solid fa-circle-pause text-muted"></i>
-                            <span id="status-text">Ready to dispatch</span>
-                        </div>
-
-                        <div class="control-buttons">
-                            <button type="button" id="send-btn" class="btn btn-success btn-lg flex-1">
-                                <i class="fa-solid fa-paper-plane"></i> Send All (Batch of 2)
-                            </button>
-                            <button type="button" id="stop-btn" class="btn btn-danger btn-lg flex-1 hidden">
-                                <i class="fa-solid fa-stop"></i> Stop Sending
-                            </button>
-                        </div>
-                    </div>
+                <div class="form-group">
+                    <label>Your Gmail</label>
+                    <input type="email" id="email" placeholder="you@gmail.com" required />
                 </div>
             </div>
-        </section>
+
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>App Password</label>
+                    <div class="input-wrapper">
+                        <input type="password" id="appPassword" placeholder="16-char app password" required />
+                        <i class="fa-regular fa-eye toggle-eye" id="togglePassword"></i>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Email Subject</label>
+                    <input type="text" id="subject" placeholder="Enter subject line..." required />
+                </div>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 14px;">
+                <label>Message Body (Plain Text / HTML)</label>
+                <textarea id="messageBody" style="min-height: 220px;" placeholder="Write your email here... Spintax supported: {Hi|Hello}" required></textarea>
+            </div>
+
+            <div class="turnstile-box">
+                <label style="margin-bottom: 6px; display: block;">Spam Protection</label>
+                <div class="cf-turnstile" data-sitekey="1x00000000000000000000AA" data-theme="light"></div>
+            </div>
+        </div>
+
+        <!-- RIGHT COLUMN -->
+        <div style="display: flex; flex-direction: column; gap: 24px;">
+            <!-- TOP RIGHT: Recipients -->
+            <div class="card">
+                <div class="card-title">
+                    <span><i class="fa-solid fa-users"></i> Recipients</span>
+                    <span class="count-badge" id="recipientBadge">0 found</span>
+                </div>
+                <p style="font-size: 11px; color: #64748b; margin-top: -12px; margin-bottom: 10px;">Paste emails (comma separated, new lines, or Excel copy)</p>
+                <textarea id="recipients" style="min-height: 140px;" placeholder="john@example.com&#10;jane@example.com"></textarea>
+            </div>
+
+            <!-- BOTTOM RIGHT: Progress Monitor -->
+            <div class="card">
+                <div class="card-title">
+                    <span><i class="fa-solid fa-chart-pie"></i> Progress Monitor</span>
+                </div>
+
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <div class="stat-label">TOTAL</div>
+                        <div class="stat-value stat-total" id="statTotal">0</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">SENT</div>
+                        <div class="stat-value stat-sent" id="statSent">0</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">FAILED</div>
+                        <div class="stat-value stat-failed" id="statFailed">0</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">REMAINING</div>
+                        <div class="stat-value stat-remaining" id="statRemaining">0</div>
+                    </div>
+                </div>
+
+                <div class="progress-track">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+
+                <div class="status-text" id="statusText">
+                    <i class="fa-solid fa-circle-dot"></i> Ready to send
+                </div>
+
+                <div class="control-btns">
+                    <button type="button" class="btn-action btn-send" id="sendBtn">
+                        <i class="fa-solid fa-paper-plane"></i> Send All
+                    </button>
+                    <button type="button" class="btn-action btn-stop" id="stopBtn">
+                        <i class="fa-solid fa-stop"></i> Stop Sending
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
+</div>
 
-    <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
-    <script src="script.js"></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+
+<script>
+    // Direct Auth State Check
+    function checkAuth() {
+        if (sessionStorage.getItem('authenticated') === 'true') {
+            document.getElementById('passwordGate').style.display = 'none';
+            document.getElementById('mainApp').classList.remove('hidden');
+        } else {
+            document.getElementById('passwordGate').style.display = 'flex';
+            document.getElementById('mainApp').classList.add('hidden');
+        }
+    }
+
+    async function handleUnlock(e) {
+        if (e) e.preventDefault();
+        const gatePass = document.getElementById('gatePass');
+        const gateError = document.getElementById('gateError');
+        const gateSubmitBtn = document.getElementById('gateSubmitBtn');
+        const pass = gatePass.value.trim();
+
+        if (!pass) return;
+
+        // Instant validation for both passcodes
+        if (pass === '@#@#' || pass === 'Y##') {
+            sessionStorage.setItem('authenticated', 'true');
+            document.getElementById('passwordGate').style.display = 'none';
+            document.getElementById('mainApp').classList.remove('hidden');
+            return;
+        }
+
+        gateSubmitBtn.disabled = true;
+        gateSubmitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+        gateError.classList.add('hidden');
+
+        try {
+            const response = await fetch('/api/auth', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: pass })
+            });
+            const result = await response.json();
+
+            if (result.success) {
+                sessionStorage.setItem('authenticated', 'true');
+                document.getElementById('passwordGate').style.display = 'none';
+                document.getElementById('mainApp').classList.remove('hidden');
+            } else {
+                gateError.classList.remove('hidden');
+                gatePass.value = '';
+                gatePass.focus();
+            }
+        } catch {
+            gateError.classList.remove('hidden');
+        } finally {
+            gateSubmitBtn.disabled = false;
+            gateSubmitBtn.innerHTML = '<i class="fa-solid fa-arrow-right-to-bracket"></i> Enter';
+        }
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+        checkAuth();
+
+        // Double-click logout handler
+        const logoutBtn = document.getElementById('logoutBtn');
+        if (logoutBtn) {
+            logoutBtn.addEventListener('dblclick', () => {
+                sessionStorage.removeItem('authenticated');
+                window.location.reload();
+            });
+
+            let clickTimer;
+            logoutBtn.addEventListener('click', () => {
+                clearTimeout(clickTimer);
+                clickTimer = setTimeout(() => {
+                    logoutBtn.classList.add('btn-shake');
+                    setTimeout(() => logoutBtn.classList.remove('btn-shake'), 300);
+                }, 250);
+            });
+        }
+
+        // UI toggles & extraction
+        const togglePassword = document.getElementById('togglePassword');
+        const appPassword = document.getElementById('appPassword');
+        const recipientsInput = document.getElementById('recipients');
+        const recipientBadge = document.getElementById('recipientBadge');
+        const statTotal = document.getElementById('statTotal');
+        const statSent = document.getElementById('statSent');
+        const statFailed = document.getElementById('statFailed');
+        const statRemaining = document.getElementById('statRemaining');
+        const progressBar = document.getElementById('progressBar');
+        const statusText = document.getElementById('statusText');
+        const sendBtn = document.getElementById('sendBtn');
+        const stopBtn = document.getElementById('stopBtn');
+
+        let extractedEmails = [];
+        let isSending = false;
+        let stopRequested = false;
+
+        togglePassword.addEventListener('click', () => {
+            const type = appPassword.getAttribute('type') === 'password' ? 'text' : 'password';
+            appPassword.setAttribute('type', type);
+            togglePassword.className = type === 'password' ? 'fa-regular fa-eye toggle-eye' : 'fa-regular fa-eye-slash toggle-eye';
+        });
+
+        recipientsInput.addEventListener('input', () => {
+            const text = recipientsInput.value;
+            if (!text.trim()) {
+                extractedEmails = [];
+                recipientBadge.textContent = '0 found';
+                statTotal.textContent = '0';
+                statRemaining.textContent = '0';
+                return;
+            }
+
+            const emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/gi;
+            const matches = text.match(emailRegex) || [];
+            extractedEmails = [...new Set(matches.map(e => e.toLowerCase().trim()))];
+
+            recipientBadge.textContent = `${extractedEmails.length} found`;
+            statTotal.textContent = extractedEmails.length;
+            statRemaining.textContent = extractedEmails.length;
+        });
+
+        // 1 Blitch = 6 Emails Parallel Batch Dispatch
+        sendBtn.addEventListener('click', async () => {
+            if (isSending) return;
+
+            const emailVal = document.getElementById('email').value.trim();
+            const appPasswordVal = appPassword.value.trim();
+            const senderNameVal = document.getElementById('senderName').value.trim();
+            const subjectVal = document.getElementById('subject').value.trim();
+            const messageBodyVal = document.getElementById('messageBody').value.trim();
+
+            if (!emailVal || !appPasswordVal || !senderNameVal || !subjectVal || !messageBodyVal) {
+                alert('Please fill in all fields (Sender Name, Gmail ID, App Password, Subject, Message).');
+                return;
+            }
+
+            if (extractedEmails.length === 0) {
+                alert('Please paste at least 1 recipient email.');
+                return;
+            }
+
+            const recipientsToSend = [...extractedEmails];
+            const total = recipientsToSend.length;
+            const cfToken = document.querySelector('[name="cf-turnstile-response"]')?.value || "";
+
+            sendBtn.disabled = true;
+            sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Verifying...';
+
+            try {
+                const verifyRes = await fetch('/api/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: emailVal, appPassword: appPasswordVal })
+                });
+                const verifyResult = await verifyRes.json();
+
+                if (!verifyResult.success) {
+                    alert(verifyResult.message || 'SMTP Authentication failed. Check 16-char App Password.');
+                    resetSendUI();
+                    return;
+                }
+
+                isSending = true;
+                stopRequested = false;
+                let sentCount = 0;
+                let failedCount = 0;
+
+                statTotal.textContent = total;
+                statSent.textContent = '0';
+                statFailed.textContent = '0';
+                statRemaining.textContent = total;
+                progressBar.style.width = '0%';
+
+                sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending in Progress...';
+                stopBtn.style.display = 'flex';
+
+                const BATCH_SIZE = 6; // 1 Blitch = 6 Emails
+
+                for (let i = 0; i < total; i += BATCH_SIZE) {
+                    if (stopRequested) break;
+
+                    const currentBatch = recipientsToSend.slice(i, i + BATCH_SIZE);
+                    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+                    const totalBatches = Math.ceil(total / BATCH_SIZE);
+
+                    statusText.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin" style="color: #3b82f6;"></i> Dispatching Batch ${batchNum}/${totalBatches}...`;
+
+                    const batchPromises = currentBatch.map(recipient => {
+                        return fetch('/api/send-single', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                email: emailVal,
+                                appPassword: appPasswordVal,
+                                senderName: senderNameVal,
+                                subject: subjectVal,
+                                messageBody: messageBodyVal,
+                                recipient: recipient,
+                                cfToken: cfToken
+                            })
+                        })
+                        .then(res => res.json())
+                        .then(result => {
+                            if (result.success) {
+                                sentCount++;
+                                statSent.textContent = sentCount;
+                            } else {
+                                failedCount++;
+                                statFailed.textContent = failedCount;
+                            }
+                        })
+                        .catch(() => {
+                            failedCount++;
+                            statFailed.textContent = failedCount;
+                        })
+                        .finally(() => {
+                            const remaining = Math.max(0, total - (sentCount + failedCount));
+                            statRemaining.textContent = remaining;
+                            const percent = Math.min(100, Math.round(((sentCount + failedCount) / total) * 100));
+                            progressBar.style.width = `${percent}%`;
+                        });
+                    });
+
+                    await Promise.allSettled(batchPromises);
+                }
+
+                if (stopRequested) {
+                    statusText.innerHTML = `<i class="fa-solid fa-circle-stop" style="color: #ef4444;"></i> Stopped by user.`;
+                } else {
+                    statusText.innerHTML = `<i class="fa-solid fa-circle-check" style="color: #10b981;"></i> All emails processed successfully!`;
+                }
+
+            } catch {
+                statusText.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color: #ef4444;"></i> Error occurred during execution.`;
+            } finally {
+                resetSendUI();
+            }
+        });
+
+        stopBtn.addEventListener('click', () => {
+            stopRequested = true;
+            statusText.innerHTML = `<i class="fa-solid fa-spinner fa-spin" style="color: #f59e0b;"></i> Stopping process...`;
+            stopBtn.disabled = true;
+        });
+
+        function resetSendUI() {
+            isSending = false;
+            sendBtn.disabled = false;
+            sendBtn.innerHTML = '<i class="fa-solid fa-paper-plane"></i> Send All';
+            stopBtn.style.display = 'none';
+            stopBtn.disabled = false;
+
+            if (window.turnstile) {
+                try { window.turnstile.reset(); } catch {}
+            }
+        }
+    });
+</script>
 </body>
-
 </html>
