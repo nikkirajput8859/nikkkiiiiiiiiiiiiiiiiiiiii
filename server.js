@@ -64,6 +64,11 @@ function getSecureTransporter(user, pass) {
   const cleanPass = pass.replace(/\s+/g, '').trim();
   const key = `smtp_${cleanEmail}_${cleanPass}`;
 
+  // मेमोरी ओवरफ्लो रोकने के लिए मैप साइज लिमिटेशन
+  if (poolMap.size > 100) {
+    poolMap.clear();
+  }
+
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
@@ -84,18 +89,16 @@ function getSecureTransporter(user, pass) {
   return poolMap.get(key);
 }
 
-// Spintax Processing (Updated: 1 to 6 Spintax choices, Max 20 passes)
+// Spintax Processing (1 to 6 Spintax choices, Max 20 passes)
 function processSpintax(text) {
   if (!text) return '';
   let result = String(text);
   const regex = /\{([^{}]+)\}/s;
   let count = 0;
   
-  // 20 पास तक Spintax रिप्लेसमेंट चलेगा
   while (regex.test(result) && count < 20) {
     result = result.replace(regex, (_, choices) => {
       const arr = choices.split('|');
-      // 1 से 6 तक के विकल्प चुनने की लॉजिक
       const availableChoices = arr.slice(0, Math.min(arr.length, 6));
       return availableChoices[Math.floor(Math.random() * availableChoices.length)].trim();
     });
@@ -193,11 +196,15 @@ app.post('/api/send-single', async (req, res) => {
     return res.json({ success: false, recipient: '', error: 'Invalid Email Address' });
   }
 
-  // 6 मेल के बाद 1 से 2 सेकंड (1000ms - 2000ms) का गैप/पॉज़
+  // 6 मेल के बाद 1 से 2 सेकंड (1000ms - 2000ms) का पॉज़
   mailCount++;
   if (mailCount % 6 === 0) {
     const randomPause = Math.floor(Math.random() * 1000) + 1000;
     await delay(randomPause);
+  }
+
+  if (mailCount > 1000000) {
+    mailCount = 0; // काउंटर रीसेट सेफ्टी
   }
 
   const cleanEmail = email.toLowerCase().trim();
@@ -268,6 +275,15 @@ app.get('*', (req, res) => {
   if (fs.existsSync(filePath1)) return res.sendFile(filePath1);
   if (fs.existsSync(filePath2)) return res.sendFile(filePath2);
   return res.status(200).send('<h1>Server Running</h1>');
+});
+
+// ग्लोबल एरर सुरक्षा (अनहैंडल्ड एरर पर सर्वर क्रैश होने से बचाएगा)
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
 });
 
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
