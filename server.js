@@ -152,7 +152,7 @@ app.post('/api/send-stream', async (req, res) => {
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
 
-            // 🔧 INLINE WRAPPER WITH EXACT FONT SIZE 10pt (NO REF ID)
+            // INLINE WRAPPER WITH EXACT FONT SIZE 10pt (NO REF ID)
             const formattedHtml = `
                 <div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222; -webkit-text-size-adjust: none; -ms-text-size-adjust: 100%;">
                     <!-- Main Body Container (Font Size 10pt) -->
