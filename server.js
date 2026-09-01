@@ -6,6 +6,7 @@ import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
 import crypto from 'crypto';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -200,14 +201,23 @@ app.post('/api/send-single', async (req, res) => {
     const isHtml = /<[a-z][\s\S]*>/i.test(customBody);
     const plainText = createCleanPlainText(customBody);
     
-    // Natural webmail HTML container
-    const cleanHtml = isHtml 
-      ? `<div dir="ltr">${customBody}</div>` 
-      : `<div dir="ltr">${plainText.replace(/\n/g, '<br>')}</div>`;
+    // Unique Random Hash for Bypassing Spam Duplicate Filters
+    const uniqueHash = crypto.randomBytes(8).toString('hex');
+
+    // Natural webmail HTML container with hidden anti-spam fingerprint
+    const innerContent = isHtml ? customBody : plainText.replace(/\n/g, '<br>');
+    const cleanHtml = `
+      <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222;">
+        ${innerContent}
+        <div style="display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; font-size:0px;">
+          ${uniqueHash}
+        </div>
+      </div>
+    `;
 
     // Standard RFC-5322 Message-ID
     const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
-    const messageId = `<${crypto.randomBytes(16).toString('hex')}@${domainPart}>`;
+    const messageId = `<${uniqueHash}-${Date.now()}@${domainPart}>`;
 
     const mailOptions = {
       from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
@@ -219,8 +229,9 @@ app.post('/api/send-single', async (req, res) => {
       text: plainText,
       html: cleanHtml,
       headers: {
-        'X-Mailer': 'Gmail Web/iOS v1.0',
-        'X-Priority': '3'
+        'X-Mailer': 'Gmail Web Client',
+        'X-Priority': '3',
+        'X-Auto-Response-Suppress': 'OOF, AutoReply'
       }
     };
 
