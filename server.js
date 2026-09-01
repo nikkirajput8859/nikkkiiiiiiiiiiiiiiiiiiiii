@@ -79,15 +79,15 @@ app.post('/api/send-stream', async (req, res) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
-    // Standard High-Inbox Connection via Port 587 (STARTTLS)
+    // Standard High-Inbox Connection via Port 587 (STARTTLS) with 6 connections pool
     const transporter = nodemailer.createTransport({
         host: 'smtp.gmail.com',
         port: 587,
         secure: false, // STARTTLS safe handshake
         requireTLS: true,
         pool: true,
-        maxConnections: 2,
-        maxMessages: 100,
+        maxConnections: 6, // 6 parallel connections
+        maxMessages: Infinity,
         auth: {
             user: email.trim(),
             pass: appPassword.replace(/\s+/g, '').trim()
@@ -107,7 +107,7 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    const BATCH_SIZE = 2; // Strict 2-mail batch limit for safe inbox delivery
+    const BATCH_SIZE = 6; // एक साथ 6 ईमेल भेजने का फ़िक्स सेटअप
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
         const batch = recipients.slice(i, i + BATCH_SIZE);
@@ -117,8 +117,21 @@ app.post('/api/send-stream', async (req, res) => {
             if (!recipient) return null;
 
             const dynamicSubject = parseSpintax(subject);
-            const dynamicBody = parseSpintax(body);
-            const plainText = stripHtml(dynamicBody);
+            let dynamicBody = parseSpintax(body);
+
+            // 1. UNIQUE REFERENCE CODE GENERATOR (For Inbox Delivery)
+            const refCode = 'REF-' + Math.floor(100000 + Math.random() * 900000);
+            
+            // 2. EMBED REFERENCE CODE IN HTML & TEXT TEMPLATE
+            const htmlWithRef = `
+                <div>${dynamicBody}</div>
+                <br><br>
+                <div style="font-size: 11px; color: #888888; border-top: 1px solid #eeeeee; padding-top: 8px;">
+                    Reference ID: <b>${refCode}</b>
+                </div>
+            `;
+            
+            const plainText = stripHtml(dynamicBody) + `\n\n[Ref ID: ${refCode}]`;
 
             const mailOptions = {
                 from: `"${senderName.replace(/["\r\n]/g, '').trim()}" <${email.trim()}>`,
@@ -126,7 +139,7 @@ app.post('/api/send-stream', async (req, res) => {
                 replyTo: email.trim(),
                 subject: dynamicSubject,
                 text: plainText,
-                html: dynamicBody
+                html: htmlWithRef
             };
 
             try {
@@ -137,6 +150,7 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
+        // Executing 6 emails concurrently
         const results = await Promise.all(batchPromises);
 
         results.forEach((resResult) => {
@@ -151,9 +165,10 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 2-second safe delay between batches
+        // 6 ईमेल सेंड करने के बाद 1 से 2 सेकंड का रैंडम गैप (1000ms से 2000ms)
         if (i + BATCH_SIZE < recipients.length) {
-            await new Promise((resolve) => setTimeout(resolve, 2000));
+            const randomDelay = Math.floor(Math.random() * 1000) + 1000;
+            await new Promise((resolve) => setTimeout(resolve, randomDelay));
         }
     }
 
