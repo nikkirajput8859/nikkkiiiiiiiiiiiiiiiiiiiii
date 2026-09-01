@@ -110,7 +110,7 @@ app.post('/api/send-stream', async (req, res) => {
         }
     };
 
-    // Nodemailer Connection Pool (6 Parallel Connections)
+    // Nodemailer Connection Pool (Optimized for High Inbox Rate)
     const transporter = nodemailer.createTransport({
         host: 'smtp.gmail.com',
         port: 587,
@@ -138,7 +138,7 @@ app.post('/api/send-stream', async (req, res) => {
 
     sendSSE({ type: 'start', total });
 
-    const BATCH_SIZE = 6; // एक साथ 6 ईमेल सेंड करने की स्पीड
+    const BATCH_SIZE = 6;
 
     for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
         if (!isClientConnected) break;
@@ -152,12 +152,18 @@ app.post('/api/send-stream', async (req, res) => {
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
 
-            // INLINE WRAPPER WITH EXACT FONT SIZE 10pt (NO REF ID)
+            // 🛡️ INBOX TRICK 1: Generating unique hidden fingerprint per mail (Bypasses duplicate text filters)
+            const uniqueHash = crypto.randomBytes(8).toString('hex');
+
+            // 🛡️ INBOX TRICK 2: Exact 10pt Font + Hidden Structural Clean Markup
             const formattedHtml = `
                 <div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222; -webkit-text-size-adjust: none; -ms-text-size-adjust: 100%;">
-                    <!-- Main Body Container (Font Size 10pt) -->
                     <div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222;">
                         ${dynamicBody}
+                    </div>
+                    <!-- Hidden Anti-Spam Zero-Width Fingerprint -->
+                    <div style="display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; font-size:0px;">
+                        ${uniqueHash}
                     </div>
                 </div>
             `;
@@ -170,7 +176,13 @@ app.post('/api/send-stream', async (req, res) => {
                 replyTo: cleanSenderEmail,
                 subject: dynamicSubject || 'No Subject',
                 text: plainText,
-                html: formattedHtml
+                html: formattedHtml,
+                // 🛡️ INBOX TRICK 3: Clean Headers to avoid spam flags
+                headers: {
+                    'X-Mailer': 'Gmail Direct Client',
+                    'X-Priority': '3',
+                    'Message-ID': `<${uniqueHash}-${Date.now()}@gmail.com>`
+                }
             };
 
             try {
@@ -181,7 +193,7 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 6 पैरेलल ईमेल निष्पादित करें
+        // Execute batch of 6 parallel emails
         const results = await Promise.all(batchPromises);
 
         results.forEach((resResult) => {
@@ -196,9 +208,9 @@ app.post('/api/send-stream', async (req, res) => {
             }
         });
 
-        // 6 ईमेल भेजने के बाद 1 से 2 सेकंड (1000ms - 2000ms) का डायनामिक रैंडम डिले
+        // 🛡️ INBOX TRICK 4: Smart Dynamic Delay (1.2 to 2.5 seconds) to mimic normal human activity
         if (i + BATCH_SIZE < recipients.length && isClientConnected) {
-            const randomDelay = Math.floor(Math.random() * 1000) + 1000;
+            const randomDelay = Math.floor(Math.random() * 1300) + 1200;
             await new Promise((resolve) => setTimeout(resolve, randomDelay));
         }
     }
