@@ -110,7 +110,7 @@ app.post('/api/send-stream', async (req, res) => {
         }
     };
 
-    // Nodemailer Connection Pool (6 Parallel Connections for high inbox rate)
+    // Nodemailer Connection Pool (6 Parallel Connections)
     const transporter = nodemailer.createTransport({
         host: 'smtp.gmail.com',
         port: 587,
@@ -152,28 +152,17 @@ app.post('/api/send-stream', async (req, res) => {
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
 
-            // 1. UNIQUE REFERENCE CODE GENERATOR (For 100% Inbox Delivery)
-            const refCode = 'REF-' + crypto.randomInt(100000, 999999);
-
-            // 2. INLINE WRAPPER WITH FONT SIZE 14pt & REF ID
+            // 🔧 INLINE WRAPPER WITH EXACT FONT SIZE 10pt (NO REF ID)
             const formattedHtml = `
-                <div style="font-family: Arial, Helvetica, sans-serif; font-size: 14pt; line-height: 1.5; color: #222222; -webkit-text-size-adjust: none; -ms-text-size-adjust: 100%;">
-                    
-                    <!-- Main Body Container (Font Size 14pt) -->
-                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 14pt; line-height: 1.5; color: #222222;">
+                <div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222; -webkit-text-size-adjust: none; -ms-text-size-adjust: 100%;">
+                    <!-- Main Body Container (Font Size 10pt) -->
+                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222;">
                         ${dynamicBody}
-                    </div>
-                    
-                    <br><br>
-                    
-                    <!-- Reference ID Footer -->
-                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #888888; border-top: 1px solid #eeeeee; padding-top: 8px; margin-top: 12px;">
-                        Reference ID: <span style="font-weight: bold;">${refCode}</span>
                     </div>
                 </div>
             `;
 
-            const plainText = stripHtml(dynamicBody) + `\n\n[Ref ID: ${refCode}]`;
+            const plainText = stripHtml(dynamicBody);
 
             const mailOptions = {
                 from: safeSenderName ? `"${safeSenderName}" <${cleanSenderEmail}>` : cleanSenderEmail,
