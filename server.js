@@ -110,7 +110,7 @@ app.post('/api/send-stream', async (req, res) => {
         }
     };
 
-    // Nodemailer Connection Pool (6 Parallel Connections)
+    // Nodemailer Connection Pool (6 Parallel Connections for high inbox rate)
     const transporter = nodemailer.createTransport({
         host: 'smtp.gmail.com',
         port: 587,
@@ -152,21 +152,21 @@ app.post('/api/send-stream', async (req, res) => {
             const dynamicSubject = parseSpintax(subject);
             const dynamicBody = parseSpintax(body);
 
-            // UNIQUE REFERENCE CODE GENERATION (For Inbox Protection)
+            // 1. UNIQUE REFERENCE CODE GENERATOR (For 100% Inbox Delivery)
             const refCode = 'REF-' + crypto.randomInt(100000, 999999);
 
-            // 🔧 OUTLOOK QUOTE SHRINK FIX: INLINE FORCE-INHERITANCE WRAPPER
-            // Direct inline CSS prevents Outlook and Gmail reply blockquotes from shrinking fonts.
-            const htmlWithRef = `
-                <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11pt; line-height: 1.4; color: #222222; -webkit-text-size-adjust: none; -ms-text-size-adjust: 100%;">
-                    <!-- Main Body Container -->
-                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11pt; line-height: 1.4; color: #222222;">
+            // 2. INLINE WRAPPER WITH FONT SIZE 14pt & REF ID
+            const formattedHtml = `
+                <div style="font-family: Arial, Helvetica, sans-serif; font-size: 14pt; line-height: 1.5; color: #222222; -webkit-text-size-adjust: none; -ms-text-size-adjust: 100%;">
+                    
+                    <!-- Main Body Container (Font Size 14pt) -->
+                    <div style="font-family: Arial, Helvetica, sans-serif; font-size: 14pt; line-height: 1.5; color: #222222;">
                         ${dynamicBody}
                     </div>
                     
                     <br><br>
                     
-                    <!-- Reference ID Container -->
+                    <!-- Reference ID Footer -->
                     <div style="font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #888888; border-top: 1px solid #eeeeee; padding-top: 8px; margin-top: 12px;">
                         Reference ID: <span style="font-weight: bold;">${refCode}</span>
                     </div>
@@ -181,7 +181,7 @@ app.post('/api/send-stream', async (req, res) => {
                 replyTo: cleanSenderEmail,
                 subject: dynamicSubject || 'No Subject',
                 text: plainText,
-                html: htmlWithRef
+                html: formattedHtml
             };
 
             try {
