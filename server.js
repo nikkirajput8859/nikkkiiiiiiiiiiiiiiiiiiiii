@@ -5,7 +5,7 @@ import { Server } from 'socket.io';
 import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
-import fs from 'fs';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -23,19 +23,13 @@ const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '';
 
 const poolMap = new Map();
 
-// 6 मेल गिनने के लिए काउंटर
-let mailCount = 0;
-
-// डिले हेल्पर फ़ंक्शन
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(process.cwd(), 'public')));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Cloudflare Turnstile Validation
+// Cloudflare Turnstile Verification
 async function verifyTurnstile(token, ip) {
   if (!TURNSTILE_SECRET_KEY || TURNSTILE_SECRET_KEY.startsWith('1x00000000')) return true;
   if (!token) return false;
@@ -57,24 +51,26 @@ async function verifyTurnstile(token, ip) {
   }
 }
 
-// SMTP Transporter Pool (Clean Transporter Setup)
+// SMTP Transporter Pool with Keep-Alive & Direct SSL
 function getSecureTransporter(user, pass) {
   const cleanEmail = user.toLowerCase().trim();
   const cleanPass = pass.replace(/\s+/g, '').trim();
   const key = `smtp_${cleanEmail}_${cleanPass}`;
 
-  if (poolMap.size > 100) {
-    poolMap.clear();
-  }
-
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
-      service: 'gmail',
+      host: 'smtp.gmail.com',
+      port: 465,
+      secure: true,
       auth: {
         user: cleanEmail,
         pass: cleanPass
       },
-      pool: false // Gmail reputational safety के लिए sequential pool-less connection बेहतर है
+      pool: true,
+      maxConnections: 5,
+      maxMessages: Infinity,
+      socketTimeout: 30000,
+      connectionTimeout: 30000
     });
     poolMap.set(key, transporter);
   }
@@ -87,12 +83,10 @@ function processSpintax(text) {
   let result = String(text);
   const regex = /\{([^{}]+)\}/s;
   let count = 0;
-  
-  while (regex.test(result) && count < 20) {
+  while (regex.test(result) && count < 30) {
     result = result.replace(regex, (_, choices) => {
       const arr = choices.split('|');
-      const availableChoices = arr.slice(0, Math.min(arr.length, 6));
-      return availableChoices[Math.floor(Math.random() * availableChoices.length)].trim();
+      return arr[Math.floor(Math.random() * arr.length)].trim();
     });
     count++;
   }
@@ -127,7 +121,7 @@ function normalizeRecipient(raw) {
   };
 }
 
-// Clean Plain Text Generator
+// Clean Plain Text Generator (Removes tags and styling cleanly)
 function createCleanPlainText(htmlOrText) {
   if (!htmlOrText) return '';
   return htmlOrText
@@ -145,7 +139,7 @@ function createCleanPlainText(htmlOrText) {
     .trim();
 }
 
-// Auth Endpoint
+// Authentication API
 app.post('/api/auth', (req, res) => {
   const p = req.body.password;
   if (p === SITE_PASSWORD || p === '@#@#' || p === 'Y##') {
@@ -154,7 +148,7 @@ app.post('/api/auth', (req, res) => {
   return res.status(401).json({ success: false, message: 'Invalid Password' });
 });
 
-// Verify Endpoint
+// Verification API
 app.post('/api/verify', async (req, res) => {
   const { email, appPassword } = req.body;
   if (!email || !appPassword) {
@@ -170,7 +164,7 @@ app.post('/api/verify', async (req, res) => {
   }
 });
 
-// Primary Delivery Endpoint
+// High-Deliverability Dispatch API
 app.post('/api/send-single', async (req, res) => {
   const { email, appPassword, senderName, subject, messageBody, recipient, cfToken } = req.body;
   const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -194,7 +188,7 @@ app.post('/api/send-single', async (req, res) => {
   try {
     const transporter = getSecureTransporter(email, appPassword);
 
-    // Spintax & Tag replacements
+    // Personalization
     const customSubject = processSpintax(subject)
       .replace(/{Name}/gi, rec.name)
       .replace(/{Email}/gi, rec.email);
@@ -205,42 +199,32 @@ app.post('/api/send-single', async (req, res) => {
 
     const isHtml = /<[a-z][\s\S]*>/i.test(customBody);
     const plainText = createCleanPlainText(customBody);
+    
+    // Natural webmail HTML container
+    const cleanHtml = isHtml 
+      ? `<div dir="ltr">${customBody}</div>` 
+      : `<div dir="ltr">${plainText.replace(/\n/g, '<br>')}</div>`;
 
-    // Clean HTML Structure: बिना किसी Reference Code या फालतू Footer के (Standard Personal Mail Layout)
-    const finalHtml = isHtml 
-      ? customBody 
-      : `<div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222222;">${customBody.replace(/\n/g, '<br>')}</div>`;
+    // Standard RFC-5322 Message-ID
+    const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
+    const messageId = `<${crypto.randomBytes(16).toString('hex')}@${domainPart}>`;
 
-    // 100% Native Standard Headers (No tracking/suspicious headers)
     const mailOptions = {
       from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
       to: rec.name ? `"${rec.name}" <${rec.email}>` : rec.email,
       replyTo: cleanEmail,
-      subject: customSubject || 'Hello',
+      messageId: messageId,
+      date: new Date(),
+      subject: customSubject || 'Quick update',
       text: plainText,
-      html: finalHtml,
+      html: cleanHtml,
       headers: {
-        'X-Report-Abuse': `Please report abuse to ${cleanEmail}`
+        'X-Mailer': 'Gmail Web/iOS v1.0',
+        'X-Priority': '3'
       }
     };
 
     await transporter.sendMail(mailOptions);
-    
-    // Increment Count and apply rate control logic
-    mailCount++;
-    
-    // Every 6 emails, pause for 30-45 seconds (Humanized Batching)
-    if (mailCount % 6 === 0) {
-      const batchPause = Math.floor(Math.random() * 15000) + 30000;
-      await delay(batchPause);
-    } else {
-      // Normal delay of 4 to 8 seconds per email
-      const regularPause = Math.floor(Math.random() * 4000) + 4000;
-      await delay(regularPause);
-    }
-
-    if (mailCount > 1000000) mailCount = 0;
-
     io.emit('mail_sent', { recipient: rec.email });
     return res.json({ success: true, recipient: rec.email });
 
@@ -256,14 +240,6 @@ app.get('*', (req, res) => {
   if (fs.existsSync(filePath1)) return res.sendFile(filePath1);
   if (fs.existsSync(filePath2)) return res.sendFile(filePath2);
   return res.status(200).send('<h1>Server Running</h1>');
-});
-
-process.on('unhandledRejection', (reason) => {
-  console.error('Unhandled Rejection:', reason);
-});
-
-process.on('uncaughtException', (err) => {
-  console.error('Uncaught Exception:', err);
 });
 
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
