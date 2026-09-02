@@ -278,8 +278,8 @@ app.post('/api/send-stream', async (req, res) => {
       break;
     }
 
-    // Natural Human Delay: 1.0 से .2 सेकंड का रैंडम गैप
-    const itemDelay = Math.floor(Math.random() * 1200) + 800;
+    // Natural Human Delay: 1.0 से 2.2 सेकंड का रैंडम गैप
+    const itemDelay = Math.floor(Math.random() * 1200) + 1200;
     await delay(itemDelay);
 
     // हर 4 मेल के बाद अतिरिक्त पॉज़ (Gmail Spam Algorithm Safeguard)
