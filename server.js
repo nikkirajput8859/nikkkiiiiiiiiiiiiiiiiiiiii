@@ -27,7 +27,7 @@ const poolMap = new Map();
 // 6 मेल गिनने के लिए ग्लोबल काउंटर
 let mailCount = 0;
 
-// 1 से 2 सेकंड के रैंडम डिले के लिए हेल्प फंक्शन
+// रैंडम डिले हेल्प फंक्शन
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 app.use(cors());
@@ -64,7 +64,6 @@ function getSecureTransporter(user, pass) {
   const cleanPass = pass.replace(/\s+/g, '').trim();
   const key = `smtp_${cleanEmail}_${cleanPass}`;
 
-  // मेमोरी ओवरफ्लो रोकने के लिए मैप साइज लिमिटेशन
   if (poolMap.size > 100) {
     poolMap.clear();
   }
@@ -135,7 +134,7 @@ function normalizeRecipient(raw) {
   };
 }
 
-// Clean Plain Text Generator (Removes tags and styling cleanly)
+// Clean Plain Text Generator
 function createCleanPlainText(htmlOrText) {
   if (!htmlOrText) return '';
   return htmlOrText
@@ -196,7 +195,7 @@ app.post('/api/send-single', async (req, res) => {
     return res.json({ success: false, recipient: '', error: 'Invalid Email Address' });
   }
 
-  // 6 मेल के बाद 1 से 2 सेकंड (1000ms - 2000ms) का पॉज़
+  // 6 मेल के बाद 1 से 2 सेकंड का पॉज़
   mailCount++;
   if (mailCount % 6 === 0) {
     const randomPause = Math.floor(Math.random() * 1000) + 1000;
@@ -204,7 +203,7 @@ app.post('/api/send-single', async (req, res) => {
   }
 
   if (mailCount > 1000000) {
-    mailCount = 0; // काउंटर रीसेट सेफ्टी
+    mailCount = 0;
   }
 
   const cleanEmail = email.toLowerCase().trim();
@@ -225,23 +224,30 @@ app.post('/api/send-single', async (req, res) => {
     const isHtml = /<[a-z][\s\S]*>/i.test(customBody);
     const plainText = createCleanPlainText(customBody);
     
-    // Unique Random Hash for Bypassing Spam Duplicate Filters
-    const uniqueHash = crypto.randomBytes(8).toString('hex');
+    // ** Unique Reference ID & Anti-Spam Generator **
+    const uniqueHash = crypto.randomBytes(4).toString('hex').toUpperCase();
+    const referenceCode = `REF-${Date.now().toString().slice(-6)}-${uniqueHash}`;
 
-    // Natural webmail HTML container with hidden anti-spam fingerprint
     const innerContent = isHtml ? customBody : plainText.replace(/\n/g, '<br>');
+
+    // Standard Clean Footer with Reference Code & Unsubscribe Notice
     const cleanHtml = `
-      <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.4; color: #222222;">
+      <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.6; color: #222222;">
         ${innerContent}
-        <div style="display:none !important; visibility:hidden; opacity:0; color:transparent; height:0; width:0; font-size:0px;">
-          ${uniqueHash}
+        <br><br>
+        <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
+        <div style="font-size: 11px; color: #777777; line-height: 1.4;">
+          <p style="margin: 0;">Reference ID: <strong>${referenceCode}</strong></p>
+          <p style="margin: 4px 0 0 0;">If you prefer not to receive further updates, reply with "Unsubscribe".</p>
         </div>
       </div>
     `;
 
+    const plainTextWithRef = `${plainText}\n\n---\nReference ID: ${referenceCode}\nTo stop receiving emails, reply with "Unsubscribe".`;
+
     // Standard RFC-5322 Message-ID
     const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
-    const messageId = `<${uniqueHash}-${Date.now()}@${domainPart}>`;
+    const messageId = `<${referenceCode.toLowerCase()}@${domainPart}>`;
 
     const mailOptions = {
       from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
@@ -249,19 +255,21 @@ app.post('/api/send-single', async (req, res) => {
       replyTo: cleanEmail,
       messageId: messageId,
       date: new Date(),
-      subject: customSubject || 'Quick update',
-      text: plainText,
+      subject: `${customSubject || 'Quick update'} [${referenceCode}]`,
+      text: plainTextWithRef,
       html: cleanHtml,
       headers: {
         'X-Mailer': 'Gmail Web Client',
+        'X-Entity-Ref-ID': referenceCode,
         'X-Priority': '3',
+        'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe%20${referenceCode}>`,
         'X-Auto-Response-Suppress': 'OOF, AutoReply'
       }
     };
 
     await transporter.sendMail(mailOptions);
-    io.emit('mail_sent', { recipient: rec.email });
-    return res.json({ success: true, recipient: rec.email });
+    io.emit('mail_sent', { recipient: rec.email, ref: referenceCode });
+    return res.json({ success: true, recipient: rec.email, ref: referenceCode });
 
   } catch (error) {
     io.emit('mail_error', { recipient: rec.email, error: error.message });
@@ -277,7 +285,6 @@ app.get('*', (req, res) => {
   return res.status(200).send('<h1>Server Running</h1>');
 });
 
-// ग्लोबल एरर सुरक्षा (अनहैंडल्ड एरर पर सर्वर क्रैश होने से बचाएगा)
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection:', reason);
 });
