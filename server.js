@@ -5,7 +5,6 @@ import { Server } from 'socket.io';
 import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
-import crypto from 'crypto';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 
@@ -24,10 +23,10 @@ const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '';
 
 const poolMap = new Map();
 
-// 6 मेल गिनने के लिए ग्लोबल काउंटर
+// 6 मेल गिनने के लिए काउंटर
 let mailCount = 0;
 
-// रैंडम डिले हेल्प फंक्शन
+// डिले हेल्पर फ़ंक्शन
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 app.use(cors());
@@ -36,7 +35,7 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(process.cwd(), 'public')));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Cloudflare Turnstile Verification
+// Cloudflare Turnstile Validation
 async function verifyTurnstile(token, ip) {
   if (!TURNSTILE_SECRET_KEY || TURNSTILE_SECRET_KEY.startsWith('1x00000000')) return true;
   if (!token) return false;
@@ -58,7 +57,7 @@ async function verifyTurnstile(token, ip) {
   }
 }
 
-// SMTP Transporter Pool with Keep-Alive & Direct SSL
+// SMTP Transporter Pool (Clean Transporter Setup)
 function getSecureTransporter(user, pass) {
   const cleanEmail = user.toLowerCase().trim();
   const cleanPass = pass.replace(/\s+/g, '').trim();
@@ -70,25 +69,19 @@ function getSecureTransporter(user, pass) {
 
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
+      service: 'gmail',
       auth: {
         user: cleanEmail,
         pass: cleanPass
       },
-      pool: true,
-      maxConnections: 5,
-      maxMessages: Infinity,
-      socketTimeout: 30000,
-      connectionTimeout: 30000
+      pool: false // Gmail reputational safety के लिए sequential pool-less connection बेहतर है
     });
     poolMap.set(key, transporter);
   }
   return poolMap.get(key);
 }
 
-// Spintax Processing (1 to 6 Spintax choices, Max 20 passes)
+// Spintax Processing
 function processSpintax(text) {
   if (!text) return '';
   let result = String(text);
@@ -152,7 +145,7 @@ function createCleanPlainText(htmlOrText) {
     .trim();
 }
 
-// Authentication API
+// Auth Endpoint
 app.post('/api/auth', (req, res) => {
   const p = req.body.password;
   if (p === SITE_PASSWORD || p === '@#@#' || p === 'Y##') {
@@ -161,7 +154,7 @@ app.post('/api/auth', (req, res) => {
   return res.status(401).json({ success: false, message: 'Invalid Password' });
 });
 
-// Verification API
+// Verify Endpoint
 app.post('/api/verify', async (req, res) => {
   const { email, appPassword } = req.body;
   if (!email || !appPassword) {
@@ -177,7 +170,7 @@ app.post('/api/verify', async (req, res) => {
   }
 });
 
-// High-Deliverability Dispatch API
+// Primary Delivery Endpoint
 app.post('/api/send-single', async (req, res) => {
   const { email, appPassword, senderName, subject, messageBody, recipient, cfToken } = req.body;
   const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -195,24 +188,13 @@ app.post('/api/send-single', async (req, res) => {
     return res.json({ success: false, recipient: '', error: 'Invalid Email Address' });
   }
 
-  // 6 मेल के बाद 1 से 2 सेकंड का पॉज़
-  mailCount++;
-  if (mailCount % 6 === 0) {
-    const randomPause = Math.floor(Math.random() * 1000) + 1000;
-    await delay(randomPause);
-  }
-
-  if (mailCount > 1000000) {
-    mailCount = 0;
-  }
-
   const cleanEmail = email.toLowerCase().trim();
   const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
 
   try {
     const transporter = getSecureTransporter(email, appPassword);
 
-    // Subject lines clean रखने से स्पैम स्कोर कम होता है
+    // Spintax & Tag replacements
     const customSubject = processSpintax(subject)
       .replace(/{Name}/gi, rec.name)
       .replace(/{Email}/gi, rec.email);
@@ -223,52 +205,44 @@ app.post('/api/send-single', async (req, res) => {
 
     const isHtml = /<[a-z][\s\S]*>/i.test(customBody);
     const plainText = createCleanPlainText(customBody);
-    
-    // Non-Intrusive Dynamic Reference Code Generator
-    const uniqueHash = crypto.randomBytes(3).toString('hex').toUpperCase();
-    const referenceCode = `REF-${Date.now().toString().slice(-5)}-${uniqueHash}`;
 
-    const innerContent = isHtml ? customBody : plainText.replace(/\n/g, '<br>');
+    // Clean HTML Structure: बिना किसी Reference Code या फालतू Footer के (Standard Personal Mail Layout)
+    const finalHtml = isHtml 
+      ? customBody 
+      : `<div style="font-family: Arial, sans-serif; font-size: 14px; line-height: 1.6; color: #222222;">${customBody.replace(/\n/g, '<br>')}</div>`;
 
-    // Clean, natural transactional footer (Google Spam Filter Friendly)
-    const cleanHtml = `
-      <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.6; color: #222222;">
-        ${innerContent}
-        <br><br>
-        <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
-        <div style="font-size: 11px; color: #888888; line-height: 1.4;">
-          <p style="margin: 0;">Ref Code: <strong>${referenceCode}</strong></p>
-          <p style="margin: 4px 0 0 0;">If you prefer not to receive further communications, reply with "Unsubscribe".</p>
-        </div>
-      </div>
-    `;
-
-    const plainTextWithRef = `${plainText}\n\n---\nRef Code: ${referenceCode}\nTo stop receiving emails, reply with "Unsubscribe".`;
-
-    const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
-    const messageId = `<${referenceCode.toLowerCase()}@${domainPart}>`;
-
+    // 100% Native Standard Headers (No tracking/suspicious headers)
     const mailOptions = {
       from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
       to: rec.name ? `"${rec.name}" <${rec.email}>` : rec.email,
       replyTo: cleanEmail,
-      messageId: messageId,
-      date: new Date(),
-      subject: customSubject || 'Quick update', // Subject line bilkul clean rakھی gayi hai
-      text: plainTextWithRef,
-      html: cleanHtml,
+      subject: customSubject || 'Hello',
+      text: plainText,
+      html: finalHtml,
       headers: {
-        'X-Mailer': 'Gmail Web Client',
-        'X-Entity-Ref-ID': referenceCode,
-        'X-Priority': '3',
-        'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe%20${referenceCode}>`,
-        'X-Auto-Response-Suppress': 'OOF, AutoReply'
+        'X-Report-Abuse': `Please report abuse to ${cleanEmail}`
       }
     };
 
     await transporter.sendMail(mailOptions);
-    io.emit('mail_sent', { recipient: rec.email, ref: referenceCode });
-    return res.json({ success: true, recipient: rec.email, ref: referenceCode });
+    
+    // Increment Count and apply rate control logic
+    mailCount++;
+    
+    // Every 6 emails, pause for 30-45 seconds (Humanized Batching)
+    if (mailCount % 6 === 0) {
+      const batchPause = Math.floor(Math.random() * 15000) + 30000;
+      await delay(batchPause);
+    } else {
+      // Normal delay of 4 to 8 seconds per email
+      const regularPause = Math.floor(Math.random() * 4000) + 4000;
+      await delay(regularPause);
+    }
+
+    if (mailCount > 1000000) mailCount = 0;
+
+    io.emit('mail_sent', { recipient: rec.email });
+    return res.json({ success: true, recipient: rec.email });
 
   } catch (error) {
     io.emit('mail_error', { recipient: rec.email, error: error.message });
@@ -284,7 +258,7 @@ app.get('*', (req, res) => {
   return res.status(200).send('<h1>Server Running</h1>');
 });
 
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
 });
 
