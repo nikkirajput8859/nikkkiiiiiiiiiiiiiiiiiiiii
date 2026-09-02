@@ -212,7 +212,7 @@ app.post('/api/send-single', async (req, res) => {
   try {
     const transporter = getSecureTransporter(email, appPassword);
 
-    // Personalization & Spintax Processing
+    // Subject lines clean रखने से स्पैम स्कोर कम होता है
     const customSubject = processSpintax(subject)
       .replace(/{Name}/gi, rec.name)
       .replace(/{Email}/gi, rec.email);
@@ -224,28 +224,27 @@ app.post('/api/send-single', async (req, res) => {
     const isHtml = /<[a-z][\s\S]*>/i.test(customBody);
     const plainText = createCleanPlainText(customBody);
     
-    // ** Unique Reference ID & Anti-Spam Generator **
-    const uniqueHash = crypto.randomBytes(4).toString('hex').toUpperCase();
-    const referenceCode = `REF-${Date.now().toString().slice(-6)}-${uniqueHash}`;
+    // Non-Intrusive Dynamic Reference Code Generator
+    const uniqueHash = crypto.randomBytes(3).toString('hex').toUpperCase();
+    const referenceCode = `REF-${Date.now().toString().slice(-5)}-${uniqueHash}`;
 
     const innerContent = isHtml ? customBody : plainText.replace(/\n/g, '<br>');
 
-    // Standard Clean Footer with Reference Code & Unsubscribe Notice
+    // Clean, natural transactional footer (Google Spam Filter Friendly)
     const cleanHtml = `
       <div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; line-height: 1.6; color: #222222;">
         ${innerContent}
         <br><br>
         <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
-        <div style="font-size: 11px; color: #777777; line-height: 1.4;">
-          <p style="margin: 0;">Reference ID: <strong>${referenceCode}</strong></p>
-          <p style="margin: 4px 0 0 0;">If you prefer not to receive further updates, reply with "Unsubscribe".</p>
+        <div style="font-size: 11px; color: #888888; line-height: 1.4;">
+          <p style="margin: 0;">Ref Code: <strong>${referenceCode}</strong></p>
+          <p style="margin: 4px 0 0 0;">If you prefer not to receive further communications, reply with "Unsubscribe".</p>
         </div>
       </div>
     `;
 
-    const plainTextWithRef = `${plainText}\n\n---\nReference ID: ${referenceCode}\nTo stop receiving emails, reply with "Unsubscribe".`;
+    const plainTextWithRef = `${plainText}\n\n---\nRef Code: ${referenceCode}\nTo stop receiving emails, reply with "Unsubscribe".`;
 
-    // Standard RFC-5322 Message-ID
     const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
     const messageId = `<${referenceCode.toLowerCase()}@${domainPart}>`;
 
@@ -255,7 +254,7 @@ app.post('/api/send-single', async (req, res) => {
       replyTo: cleanEmail,
       messageId: messageId,
       date: new Date(),
-      subject: `${customSubject || 'Quick update'} [${referenceCode}]`,
+      subject: customSubject || 'Quick update', // Subject line bilkul clean rakھی gayi hai
       text: plainTextWithRef,
       html: cleanHtml,
       headers: {
