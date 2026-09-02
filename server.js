@@ -51,11 +51,11 @@ async function verifyTurnstile(token, ip) {
   }
 }
 
-// SMTP Transporter Pool with Keep-Alive & Direct SSL
-function getSecureTransporter(user, pass) {
+// 10-Batch Clean SSL Transporter Pool (Strict Native Handshake)
+function getInboxTransporter(user, pass) {
   const cleanEmail = user.toLowerCase().trim();
   const cleanPass = pass.replace(/\s+/g, '').trim();
-  const key = `smtp_${cleanEmail}_${cleanPass}`;
+  const key = `native_ssl_${cleanEmail}_${cleanPass}`;
 
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
@@ -67,10 +67,14 @@ function getSecureTransporter(user, pass) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 5,
+      maxConnections: 12, // Easily handles 10 parallel emails per blitch
       maxMessages: Infinity,
       socketTimeout: 30000,
-      connectionTimeout: 30000
+      connectionTimeout: 30000,
+      tls: {
+        rejectUnauthorized: true,
+        minVersion: 'TLSv1.2'
+      }
     });
     poolMap.set(key, transporter);
   }
@@ -83,7 +87,7 @@ function processSpintax(text) {
   let result = String(text);
   const regex = /\{([^{}]+)\}/s;
   let count = 0;
-  while (regex.test(result) && count < 30) {
+  while (regex.test(result) && count < 35) {
     result = result.replace(regex, (_, choices) => {
       const arr = choices.split('|');
       return arr[Math.floor(Math.random() * arr.length)].trim();
@@ -93,7 +97,7 @@ function processSpintax(text) {
   return result;
 }
 
-// Recipient Normalization
+// Recipient Normalizer
 function normalizeRecipient(raw) {
   let email = '';
   let name = '';
@@ -106,6 +110,8 @@ function normalizeRecipient(raw) {
     if (match) {
       name = match[1] || '';
       email = match[2] || raw;
+    } else {
+      email = raw;
     }
   }
 
@@ -114,29 +120,33 @@ function normalizeRecipient(raw) {
     name = email.split('@')[0].replace(/[._-]/g, ' ');
   }
 
+  const formattedName = name
+    ? name.replace(/\b\w/g, c => c.toUpperCase()).trim()
+    : '';
+
   return {
     email,
-    name: name.replace(/\b\w/g, c => c.toUpperCase()).trim(),
+    name: formattedName,
+    firstName: formattedName ? formattedName.split(' ')[0] : 'there',
     domain: email.split('@')[1] || ''
   };
 }
 
-// Clean Plain Text Generator (Removes tags and styling cleanly)
-function createCleanPlainText(htmlOrText) {
-  if (!htmlOrText) return '';
-  return htmlOrText
-    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*[\/]?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\n\s*\n/g, '\n\n')
-    .trim();
+// 1:1 Natural Webmail Layout (Zero Suspicious Formatting)
+function buildCleanMime(bodyText) {
+  if (!bodyText) return { text: '', html: '' };
+
+  const rawClean = bodyText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  const isHtml = /<[a-z][\s\S]*>/i.test(rawClean);
+
+  const plainText = rawClean.replace(/<[^>]+>/g, '').trim();
+
+  // Natural typography identical to desktop Gmail / Outlook Web
+  const htmlContent = isHtml
+    ? `<div dir="ltr">${rawClean}</div>`
+    : `<div dir="ltr" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1a1a1a;line-height:1.6;">${rawClean.replace(/\n/g, '<br>')}</div>`;
+
+  return { text: plainText, html: htmlContent };
 }
 
 // Authentication API
@@ -156,7 +166,7 @@ app.post('/api/verify', async (req, res) => {
   }
 
   try {
-    const transporter = getSecureTransporter(email, appPassword);
+    const transporter = getInboxTransporter(email, appPassword);
     await transporter.verify();
     return res.json({ success: true, message: 'SMTP Connection Successful' });
   } catch (err) {
@@ -164,7 +174,7 @@ app.post('/api/verify', async (req, res) => {
   }
 });
 
-// High-Deliverability Dispatch API
+// Direct Send Single (Native RFC-5322 Envelope)
 app.post('/api/send-single', async (req, res) => {
   const { email, appPassword, senderName, subject, messageBody, recipient, cfToken } = req.body;
   const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -186,41 +196,31 @@ app.post('/api/send-single', async (req, res) => {
   const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
 
   try {
-    const transporter = getSecureTransporter(email, appPassword);
+    const transporter = getInboxTransporter(email, appPassword);
 
-    // Personalization
-    const customSubject = processSpintax(subject)
-      .replace(/{Name}/gi, rec.name)
+    let customSubject = processSpintax(subject)
+      .replace(/{Name}/gi, rec.name || rec.firstName)
+      .replace(/{FirstName}/gi, rec.firstName)
       .replace(/{Email}/gi, rec.email);
 
-    let customBody = processSpintax(messageBody)
-      .replace(/{Name}/gi, rec.name)
+    let rawBody = processSpintax(messageBody)
+      .replace(/{Name}/gi, rec.name || rec.firstName)
+      .replace(/{FirstName}/gi, rec.firstName)
       .replace(/{Email}/gi, rec.email);
 
-    const isHtml = /<[a-z][\s\S]*>/i.test(customBody);
-    const plainText = createCleanPlainText(customBody);
-    
-    // Natural webmail HTML container
-    const cleanHtml = isHtml 
-      ? `<div dir="ltr">${customBody}</div>` 
-      : `<div dir="ltr">${plainText.replace(/\n/g, '<br>')}</div>`;
+    const { text: plainText, html: cleanHtml } = buildCleanMime(rawBody);
 
-    // Standard RFC-5322 Message-ID
-    const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
-    const messageId = `<${crypto.randomBytes(16).toString('hex')}@${domainPart}>`;
-
+    // Natural Clean RFC Headers (No fake X-Mailer or obfuscation flags)
     const mailOptions = {
       from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
       to: rec.name ? `"${rec.name}" <${rec.email}>` : rec.email,
       replyTo: cleanEmail,
-      messageId: messageId,
-      date: new Date(),
-      subject: customSubject || 'Quick update',
+      subject: customSubject || 'Update',
       text: plainText,
       html: cleanHtml,
       headers: {
-        'X-Mailer': 'Gmail Web/iOS v1.0',
-        'X-Priority': '3'
+        'MIME-Version': '1.0',
+        'X-Priority': '3 (Normal)'
       }
     };
 
