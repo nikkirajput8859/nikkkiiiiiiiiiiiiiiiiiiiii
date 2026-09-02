@@ -76,8 +76,8 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 6, // 6 Paralell connection को सपोर्ट करने के लिए अपडेट किया
-      maxMessages: 200,
+      maxConnections: 3, // Safe rate to prevent account flags
+      maxMessages: 100,
       socketTimeout: 30000,
       connectionTimeout: 30000,
       tls: {
@@ -236,7 +236,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   STREAMING DISPATCH ROUTE (6 Emails Batch + 1 to 2 Sec Delay)
+   STREAMING DISPATCH ROUTE (Safe Sequence Dispatch with Anti-Spam Shield)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -271,95 +271,86 @@ app.post('/api/send-stream', async (req, res) => {
   }, 4000);
 
   const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 6; // एक साथ 6 मेल भेजे जाएंगे
 
-  for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+  for (let i = 0; i < recipients.length; i++) {
     if (globalSession.stopRequested) {
       res.write(`data: ${JSON.stringify({ success: false, error: 'Stopped by User' })}\n\n`);
       break;
     }
 
-    // 6 रिसिपिएंट्स का एक स्लैश (Batch) लें
-    const batch = recipients.slice(i, i + BATCH_SIZE);
+    // Natural Human Delay: 1.0 से .2 सेकंड का रैंडम गैप
+    const itemDelay = Math.floor(Math.random() * 1200) + 800;
+    await delay(itemDelay);
 
-    // 6 ईमेल एक साथ (Concurrent) ट्रिगर करें
-    const sendPromises = batch.map(async (rawRecipient) => {
-      const recipient = parseRecipientData(rawRecipient);
-
-      if (!recipient.email) {
-        return { success: false, recipient: '', error: 'Invalid Email' };
-      }
-
-      try {
-        const personalizedSubject = personalizeContent(subject, recipient);
-        const personalizedBody = personalizeContent(messageBody, recipient);
-        const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
-
-        const uniqueHash = crypto.randomBytes(3).toString('hex').toUpperCase();
-        const referenceCode = `REF-${Date.now().toString().slice(-5)}-${uniqueHash}`;
-
-        const innerContent = isHtml 
-          ? personalizedBody 
-          : personalizedBody.replace(/\n/g, '<br>');
-
-        const formattedHtml = `
-          <div dir="ltr" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 10px;">
-            ${innerContent}
-            <br><br>
-            <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
-            <div style="font-size: 11px; color: #888888; line-height: 1.4;">
-              <p style="margin: 0;">Ref Code: <strong>${referenceCode}</strong></p>
-              <p style="margin: 4px 0 0 0;">If you prefer not to receive further updates, reply with "Unsubscribe".</p>
-            </div>
-          </div>
-        `;
-
-        const plainTextFormatted = `${createPlainTextFromHtml(personalizedBody)}\n\n---\nRef Code: ${referenceCode}\nTo stop receiving emails, reply with "Unsubscribe".`;
-
-        const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
-        const messageId = `<${referenceCode.toLowerCase()}@${domainPart}>`;
-
-        const mailOptions = {
-          from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
-          to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
-          replyTo: cleanEmail,
-          messageId: messageId,
-          date: new Date(),
-          subject: personalizedSubject || 'Update',
-          html: formattedHtml,
-          text: plainTextFormatted,
-          headers: {
-            'MIME-Version': '1.0',
-            'X-Mailer': 'Gmail Web Client',
-            'X-Entity-Ref-ID': referenceCode,
-            'X-Priority': '3 (Normal)',
-            'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe%20${referenceCode}>`,
-            'X-Auto-Response-Suppress': 'OOF, AutoReply'
-          }
-        };
-
-        await transporter.sendMail(mailOptions);
-        return { success: true, recipient: recipient.email, name: recipient.name, ref: referenceCode };
-
-      } catch (err) {
-        return { success: false, recipient: recipient.email, error: err.message };
-      }
-    });
-
-    // Promise.allSettled से 6 ईमेल एक साथ प्रोसेस होंगे
-    const results = await Promise.allSettled(sendPromises);
-
-    // रिस्पॉन्स क्लाइंट/UI पर भेजें
-    for (const resItem of results) {
-      if (resItem.status === 'fulfilled') {
-        res.write(`data: ${JSON.stringify(resItem.value)}\n\n`);
-      }
+    // हर 4 मेल के बाद अतिरिक्त पॉज़ (Gmail Spam Algorithm Safeguard)
+    if ((i + 1) % 4 === 0) {
+      const batchPause = Math.floor(Math.random() * 1500) + 1500;
+      await delay(batchPause);
     }
 
-    // 6 मेल भेजने के बाद 1 से 2 सेकंड का रैंडम गैप (1000ms से 2000ms)
-    if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(Math.random() * 1000) + 1000;
-      await delay(batchDelay);
+    const rawRecipient = recipients[i];
+    const recipient = parseRecipientData(rawRecipient);
+
+    if (!recipient.email) {
+      res.write(`data: ${JSON.stringify({ success: false, recipient: '', error: 'Invalid Email' })}\n\n`);
+      continue;
+    }
+
+    try {
+      const personalizedSubject = personalizeContent(subject, recipient);
+      const personalizedBody = personalizeContent(messageBody, recipient);
+      const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
+
+      // Unique Reference Code for Template Only
+      const uniqueHash = crypto.randomBytes(3).toString('hex').toUpperCase();
+      const referenceCode = `REF-${Date.now().toString().slice(-5)}-${uniqueHash}`;
+
+      const innerContent = isHtml 
+        ? personalizedBody 
+        : personalizedBody.replace(/\n/g, '<br>');
+
+      // Anti-Spam Webmail HTML Layout
+      const formattedHtml = `
+        <div dir="ltr" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 10px;">
+          ${innerContent}
+          <br><br>
+          <hr style="border: 0; border-top: 1px solid #eeeeee; margin: 20px 0;">
+          <div style="font-size: 11px; color: #888888; line-height: 1.4;">
+            <p style="margin: 0;">Ref Code: <strong>${referenceCode}</strong></p>
+            <p style="margin: 4px 0 0 0;">If you prefer not to receive further updates, reply with "Unsubscribe".</p>
+          </div>
+        </div>
+      `;
+
+      const plainTextFormatted = `${createPlainTextFromHtml(personalizedBody)}\n\n---\nRef Code: ${referenceCode}\nTo stop receiving emails, reply with "Unsubscribe".`;
+
+      const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
+      const messageId = `<${referenceCode.toLowerCase()}@${domainPart}>`;
+
+      const mailOptions = {
+        from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
+        to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
+        replyTo: cleanEmail,
+        messageId: messageId,
+        date: new Date(),
+        subject: personalizedSubject || 'Update', // Clean subject line
+        html: formattedHtml,
+        text: plainTextFormatted,
+        headers: {
+          'MIME-Version': '1.0',
+          'X-Mailer': 'Gmail Web Client',
+          'X-Entity-Ref-ID': referenceCode,
+          'X-Priority': '3 (Normal)',
+          'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe%20${referenceCode}>`,
+          'X-Auto-Response-Suppress': 'OOF, AutoReply'
+        }
+      };
+
+      await transporter.sendMail(mailOptions);
+      res.write(`data: ${JSON.stringify({ success: true, recipient: recipient.email, name: recipient.name, ref: referenceCode })}\n\n`);
+
+    } catch (err) {
+      res.write(`data: ${JSON.stringify({ success: false, recipient: recipient.email, error: err.message })}\n\n`);
     }
   }
 
