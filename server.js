@@ -18,10 +18,10 @@ const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '1x000000000000
 const globalSession = { stopRequested: false };
 const poolMap = new Map();
 
-// Random Delay Helper (Humanized Pause)
+// Dynamic Helper Delays
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Express Configuration
+// Express Setup
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
@@ -54,7 +54,7 @@ async function verifyTurnstileToken(token, remoteIp) {
 }
 
 /* ==========================================================================
-   GMAIL TLS TRANSPORTER POOL (Port 587 STARTTLS)
+   GMAIL TLS TRANSPORTER POOL (Optimized TLS & Connections)
    ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
@@ -76,7 +76,7 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 6, // 6 concurrent emails सपोर्ट के लिए सेट किया गया
+      maxConnections: 6,
       maxMessages: 100,
       socketTimeout: 30000,
       connectionTimeout: 30000,
@@ -91,7 +91,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   RECIPIENT NORMALIZATION & SPINTAX RESOLVER
+   RECIPIENT & SPINTAX HELPERS WITH INVISIBLE SPAM-BYPASS HASH
    ========================================================================== */
 function parseRecipientData(input) {
   let email = '';
@@ -156,6 +156,16 @@ function parseSpintax(text) {
     iterations++;
   }
   return spun.replace(/[\{\}]/g, '').trim();
+}
+
+// Zero-width space generator: Unseen by users, but changes body cryptographic fingerprint for Spam Bypassing
+function getInvisibleHash() {
+  const zeroWidthChars = ['\u200B', '\u200C', '\u200D', '\uFEFF'];
+  let hash = '';
+  for (let i = 0; i < 6; i++) {
+    hash += zeroWidthChars[Math.floor(Math.random() * zeroWidthChars.length)];
+  }
+  return hash;
 }
 
 function personalizeContent(template, recipient) {
@@ -236,7 +246,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   STREAMING DISPATCH ROUTE (6 Parallel Batch + 1 to 2 Sec Delay)
+   INBOX-OPTIMIZED DISPATCH ROUTE (Batch 6 + Micro-Staggering)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -271,7 +281,7 @@ app.post('/api/send-stream', async (req, res) => {
   }, 4000);
 
   const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 6; // एक साथ 6 ईमेल प्रेषित होंगे
+  const BATCH_SIZE = 6;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -279,11 +289,12 @@ app.post('/api/send-stream', async (req, res) => {
       break;
     }
 
-    // 6 रेसिपीएंट्स का एक ग्रुप निकालें
     const currentBatch = recipients.slice(i, i + BATCH_SIZE);
 
-    // 6 ईमेल्स को पैरालेल (Parallel) प्रोसेस करें
-    const sendPromises = currentBatch.map(async (rawRecipient) => {
+    // Micro-staggering inside the batch to avoid simultaneous TLS handshake flags
+    const sendPromises = currentBatch.map(async (rawRecipient, index) => {
+      await delay(index * 150); // 150ms delay per thread in batch
+      
       const recipient = parseRecipientData(rawRecipient);
 
       if (!recipient.email) {
@@ -295,56 +306,47 @@ app.post('/api/send-stream', async (req, res) => {
         const personalizedBody = personalizeContent(messageBody, recipient);
         const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
 
-        const uniqueHash = crypto.randomBytes(4).toString('hex').toLowerCase();
-        const referenceCode = `ID-${Date.now().toString().slice(-6)}-${uniqueHash}`;
-
+        const invisibleSalt = getInvisibleHash();
         const innerContent = isHtml 
           ? personalizedBody 
           : personalizedBody.replace(/\n/g, '<br>');
 
-        const formattedHtml = `
-          <div dir="ltr" style="font-family: Arial, sans-serif; font-size: 14px; color: #111111; line-height: 1.5;">
-            ${innerContent}
-          </div>
-        `;
+        // Natural HTML block without marketing wrapper signatures
+        const formattedHtml = `${innerContent}${invisibleSalt}`;
+        const plainTextFormatted = createPlainTextFromHtml(personalizedBody) + invisibleSalt;
 
-        const plainTextFormatted = createPlainTextFromHtml(personalizedBody);
-
+        // Clean natural email payload
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
           to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
           replyTo: cleanEmail,
-          date: new Date(),
-          subject: personalizedSubject || 'Update',
+          subject: (personalizedSubject || 'Update') + invisibleSalt,
           html: formattedHtml,
-          text: plainTextFormatted,
-          headers: {
-            'MIME-Version': '1.0',
-            'X-Priority': '3 (Normal)',
-            'X-Entity-Ref-ID': referenceCode,
-            'X-Auto-Response-Suppress': 'OOF, AutoReply'
-          }
+          text: plainTextFormatted
         };
 
-        await transporter.sendMail(mailOptions);
-        return { success: true, recipient: recipient.email, name: recipient.name, ref: referenceCode };
+        const info = await transporter.sendMail(mailOptions);
+        return { 
+          success: true, 
+          recipient: recipient.email, 
+          name: recipient.name, 
+          ref: info.messageId || 'SENT' 
+        };
 
       } catch (err) {
         return { success: false, recipient: recipient.email, error: err.message };
       }
     });
 
-    // 6 प्रॉमिस निष्पादित करें
     const batchResults = await Promise.allSettled(sendPromises);
 
-    // SSE के ज़रिए UI को लाइव स्टेटस भेजें
     for (const resItem of batchResults) {
       if (resItem.status === 'fulfilled') {
         res.write(`data: ${JSON.stringify(resItem.value)}\n\n`);
       }
     }
 
-    // अगले बैच से पहले 1 से 2 सेकंड (1000ms - 2000ms) का रैंडम गैप
+    // 1 to 2 seconds randomized delay between 6-mail batches
     if (i + BATCH_SIZE < recipients.length) {
       const batchDelay = Math.floor(Math.random() * 1000) + 1000;
       await delay(batchDelay);
