@@ -6,6 +6,7 @@ import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
 import crypto from 'crypto';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +23,12 @@ const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '';
 
 const poolMap = new Map();
+
+// 5 मेल गिनने के लिए ग्लोबल काउंटर
+let mailCount = 0;
+
+// रैंडम डिले हेल्प फंक्शन
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -51,11 +58,15 @@ async function verifyTurnstile(token, ip) {
   }
 }
 
-// 10-Batch Clean SSL Transporter Pool (Strict Native Handshake)
+// SMTP Transporter Pool (Safe Connection Limits)
 function getInboxTransporter(user, pass) {
   const cleanEmail = user.toLowerCase().trim();
   const cleanPass = pass.replace(/\s+/g, '').trim();
   const key = `native_ssl_${cleanEmail}_${cleanPass}`;
+
+  if (poolMap.size > 100) {
+    poolMap.clear();
+  }
 
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
@@ -67,8 +78,8 @@ function getInboxTransporter(user, pass) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 12, // Easily handles 10 parallel emails per blitch
-      maxMessages: Infinity,
+      maxConnections: 3, // Safe rate to avoid account suspension
+      maxMessages: 100,
       socketTimeout: 30000,
       connectionTimeout: 30000,
       tls: {
@@ -132,8 +143,8 @@ function normalizeRecipient(raw) {
   };
 }
 
-// 1:1 Natural Webmail Layout (Zero Suspicious Formatting)
-function buildCleanMime(bodyText) {
+// Safe Webmail Template Builder with Reference Code
+function buildCleanMime(bodyText, refCode) {
   if (!bodyText) return { text: '', html: '' };
 
   const rawClean = bodyText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
@@ -141,12 +152,25 @@ function buildCleanMime(bodyText) {
 
   const plainText = rawClean.replace(/<[^>]+>/g, '').trim();
 
-  // Natural typography identical to desktop Gmail / Outlook Web
-  const htmlContent = isHtml
-    ? `<div dir="ltr">${rawClean}</div>`
-    : `<div dir="ltr" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1a1a1a;line-height:1.6;">${rawClean.replace(/\n/g, '<br>')}</div>`;
+  const innerContent = isHtml 
+    ? rawClean 
+    : rawClean.replace(/\n/g, '<br>');
 
-  return { text: plainText, html: htmlContent };
+  const htmlContent = `
+    <div dir="ltr" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#1a1a1a;line-height:1.6;">
+      ${innerContent}
+      <br><br>
+      <hr style="border:0;border-top:1px solid #eeeeee;margin:20px 0;">
+      <div style="font-size:11px;color:#888888;line-height:1.4;">
+        <p style="margin:0;">Ref Code: <strong>${refCode}</strong></p>
+        <p style="margin:4px 0 0 0;">If you prefer not to receive further updates, reply with "Unsubscribe".</p>
+      </div>
+    </div>
+  `;
+
+  const plainTextWithRef = `${plainText}\n\n---\nRef Code: ${refCode}\nTo stop receiving emails, reply with "Unsubscribe".`;
+
+  return { text: plainTextWithRef, html: htmlContent };
 }
 
 // Authentication API
@@ -174,7 +198,7 @@ app.post('/api/verify', async (req, res) => {
   }
 });
 
-// Direct Send Single (Native RFC-5322 Envelope)
+// Direct Send Single (High Deliverability Envelope)
 app.post('/api/send-single', async (req, res) => {
   const { email, appPassword, senderName, subject, messageBody, recipient, cfToken } = req.body;
   const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -192,6 +216,19 @@ app.post('/api/send-single', async (req, res) => {
     return res.json({ success: false, recipient: '', error: 'Invalid Email Address' });
   }
 
+  // Safe Human Delay Between Requests (1.0 to 2.2 Seconds)
+  const itemDelay = Math.floor(Math.random() * 1200) + 1000;
+  await delay(itemDelay);
+
+  // 5 मेल भेजने के बाद अतिरिक्त पॉज़
+  mailCount++;
+  if (mailCount % 5 === 0) {
+    const batchPause = Math.floor(Math.random() * 1500) + 1500;
+    await delay(batchPause);
+  }
+
+  if (mailCount > 1000000) mailCount = 0;
+
   const cleanEmail = email.toLowerCase().trim();
   const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
 
@@ -208,25 +245,37 @@ app.post('/api/send-single', async (req, res) => {
       .replace(/{FirstName}/gi, rec.firstName)
       .replace(/{Email}/gi, rec.email);
 
-    const { text: plainText, html: cleanHtml } = buildCleanMime(rawBody);
+    // Dynamic Reference Code Generation
+    const uniqueHash = crypto.randomBytes(3).toString('hex').toUpperCase();
+    const referenceCode = `REF-${Date.now().toString().slice(-5)}-${uniqueHash}`;
 
-    // Natural Clean RFC Headers (No fake X-Mailer or obfuscation flags)
+    const { text: plainText, html: cleanHtml } = buildCleanMime(rawBody, referenceCode);
+
+    const domainPart = cleanEmail.split('@')[1] || 'gmail.com';
+    const messageId = `<${referenceCode.toLowerCase()}@${domainPart}>`;
+
     const mailOptions = {
       from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
       to: rec.name ? `"${rec.name}" <${rec.email}>` : rec.email,
       replyTo: cleanEmail,
-      subject: customSubject || 'Update',
+      messageId: messageId,
+      date: new Date(),
+      subject: customSubject || 'Update', // Keep subject completely clean
       text: plainText,
       html: cleanHtml,
       headers: {
         'MIME-Version': '1.0',
-        'X-Priority': '3 (Normal)'
+        'X-Mailer': 'Gmail Web Client',
+        'X-Entity-Ref-ID': referenceCode,
+        'X-Priority': '3 (Normal)',
+        'List-Unsubscribe': `<mailto:${cleanEmail}?subject=Unsubscribe%20${referenceCode}>`,
+        'X-Auto-Response-Suppress': 'OOF, AutoReply'
       }
     };
 
     await transporter.sendMail(mailOptions);
-    io.emit('mail_sent', { recipient: rec.email });
-    return res.json({ success: true, recipient: rec.email });
+    io.emit('mail_sent', { recipient: rec.email, ref: referenceCode });
+    return res.json({ success: true, recipient: rec.email, ref: referenceCode });
 
   } catch (error) {
     io.emit('mail_error', { recipient: rec.email, error: error.message });
@@ -240,6 +289,14 @@ app.get('*', (req, res) => {
   if (fs.existsSync(filePath1)) return res.sendFile(filePath1);
   if (fs.existsSync(filePath2)) return res.sendFile(filePath2);
   return res.status(200).send('<h1>Server Running</h1>');
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
 });
 
 if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
