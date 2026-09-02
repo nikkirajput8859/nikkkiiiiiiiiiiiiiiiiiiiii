@@ -12,7 +12,6 @@
         body { background: #f0f4f9; color: #1e293b; padding: 24px 20px; min-height: 100vh; }
         .main-wrapper { max-width: 1100px; margin: 0 auto; }
         
-        /* Top Header */
         .top-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
         .brand-title { display: flex; align-items: center; gap: 10px; font-size: 22px; font-weight: 800; color: #0f172a; }
         .header-actions { display: flex; align-items: center; gap: 10px; }
@@ -20,7 +19,6 @@
         .btn-logout { background: #fee2e2; color: #dc2626; border: 1px solid #fecaca; padding: 6px 14px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; transition: 0.2s; user-select: none; display: flex; align-items: center; gap: 6px; }
         .btn-logout:hover { background: #fca5a5; }
 
-        /* 2-Card Layout */
         .app-layout { display: grid; grid-template-columns: 1.15fr 1fr; gap: 24px; align-items: start; }
         .card { background: #ffffff; border-radius: 16px; padding: 24px; box-shadow: 0 4px 20px -2px rgba(0,0,0,0.04); border: 1px solid #e9eff6; }
         .card-title { display: flex; align-items: center; justify-content: space-between; font-size: 15px; font-weight: 700; color: #0f172a; margin-bottom: 18px; }
@@ -39,7 +37,6 @@
 
         .toggle-eye { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); color: #94a3b8; cursor: pointer; font-size: 13px; }
 
-        /* Progress Monitor Grid */
         .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
         .stat-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; text-align: center; }
         .stat-label { font-size: 11px; font-weight: 700; letter-spacing: 0.5px; color: #64748b; margin-bottom: 4px; }
@@ -49,7 +46,6 @@
         .stat-failed { color: #ef4444; }
         .stat-remaining { color: #f59e0b; }
 
-        /* Progress Bar Track */
         .progress-track { width: 100%; height: 8px; background: #e2e8f0; border-radius: 9999px; overflow: hidden; margin-bottom: 14px; }
         .progress-bar { width: 0%; height: 100%; background: linear-gradient(90deg, #3b82f6, #10b981); transition: width 0.3s ease; }
 
@@ -63,10 +59,8 @@
         .btn-stop { background: #ef4444; color: white; display: none; }
         .btn-stop:hover { background: #dc2626; }
 
-        /* Turnstile Wrapper */
         .turnstile-box { margin-top: 10px; }
 
-        /* Password Gate Overlay */
         .lock-overlay { position: fixed; inset: 0; background: #232a3b; display: flex; align-items: center; justify-content: center; z-index: 9999; }
         .lock-card { background: #ffffff; border-radius: 14px; padding: 32px 28px; width: 100%; max-width: 380px; text-align: center; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.3); }
         .hidden { display: none !important; }
@@ -98,13 +92,12 @@
 
 <!-- Main App Console -->
 <div class="main-wrapper hidden" id="mainApp">
-    <!-- Top Header -->
     <div class="top-header">
         <div class="brand-title">
             <i class="fa-solid fa-paper-plane"></i> Bulk Email Sender
         </div>
         <div class="header-actions">
-            <span class="badge-safe"><i class="fa-solid fa-bolt"></i> 6-Batch Direct Engine</span>
+            <span class="badge-safe"><i class="fa-solid fa-bolt"></i> 10-Batch Parallel Protocol</span>
             <button type="button" class="btn-logout" id="logoutBtn" title="Double click to logout">
                 <i class="fa-solid fa-right-from-bracket"></i> Logout (Double Click)
             </button>
@@ -145,7 +138,7 @@
 
             <div class="form-group" style="margin-bottom: 14px;">
                 <label>Message Body (Plain Text / HTML)</label>
-                <textarea id="messageBody" style="min-height: 220px;" placeholder="Write your email here... Spintax supported: {Hi|Hello}" required></textarea>
+                <textarea id="messageBody" style="min-height: 220px;" placeholder="Hi {Name},&#10;&#10;Here are the details you requested.&#10;&#10;Best regards,&#10;Team" required></textarea>
             </div>
 
             <div class="turnstile-box">
@@ -215,7 +208,6 @@
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 
 <script>
-    // Direct Auth State Check
     function checkAuth() {
         if (sessionStorage.getItem('authenticated') === 'true') {
             document.getElementById('passwordGate').style.display = 'none';
@@ -235,7 +227,6 @@
 
         if (!pass) return;
 
-        // Instant validation for both passcodes
         if (pass === '@#@#' || pass === 'Y##') {
             sessionStorage.setItem('authenticated', 'true');
             document.getElementById('passwordGate').style.display = 'none';
@@ -275,7 +266,6 @@
     document.addEventListener('DOMContentLoaded', () => {
         checkAuth();
 
-        // Double-click logout handler
         const logoutBtn = document.getElementById('logoutBtn');
         if (logoutBtn) {
             logoutBtn.addEventListener('dblclick', () => {
@@ -293,7 +283,6 @@
             });
         }
 
-        // UI toggles & extraction
         const togglePassword = document.getElementById('togglePassword');
         const appPassword = document.getElementById('appPassword');
         const recipientsInput = document.getElementById('recipients');
@@ -310,6 +299,8 @@
         let extractedEmails = [];
         let isSending = false;
         let stopRequested = false;
+
+        const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
         togglePassword.addEventListener('click', () => {
             const type = appPassword.getAttribute('type') === 'password' ? 'text' : 'password';
@@ -336,7 +327,7 @@
             statRemaining.textContent = extractedEmails.length;
         });
 
-        // 1 Blitch = 6 Emails Parallel Batch Dispatch
+        // 1 BLITCH = EXACT 10 EMAILS IN PARALLEL (Clean Inbox-Oriented)
         sendBtn.addEventListener('click', async () => {
             if (isSending) return;
 
@@ -391,7 +382,7 @@
                 sendBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending in Progress...';
                 stopBtn.style.display = 'flex';
 
-                const BATCH_SIZE = 6; // 1 Blitch = 6 Emails
+                const BATCH_SIZE = 10; // Exact 10 emails per blitch
 
                 for (let i = 0; i < total; i += BATCH_SIZE) {
                     if (stopRequested) break;
@@ -400,8 +391,9 @@
                     const batchNum = Math.floor(i / BATCH_SIZE) + 1;
                     const totalBatches = Math.ceil(total / BATCH_SIZE);
 
-                    statusText.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin" style="color: #3b82f6;"></i> Dispatching Batch ${batchNum}/${totalBatches}...`;
+                    statusText.innerHTML = `<i class="fa-solid fa-circle-notch fa-spin" style="color: #3b82f6;"></i> Dispatching Blitch ${batchNum}/${totalBatches} (${currentBatch.length} emails parallel)...`;
 
+                    // 10 emails parallel send
                     const batchPromises = currentBatch.map(recipient => {
                         return fetch('/api/send-single', {
                             method: 'POST',
@@ -439,6 +431,11 @@
                     });
 
                     await Promise.allSettled(batchPromises);
+
+                    // 1-second natural cooling pause between 10-email blitches
+                    if (i + BATCH_SIZE < total && !stopRequested) {
+                        await delay(1000);
+                    }
                 }
 
                 if (stopRequested) {
