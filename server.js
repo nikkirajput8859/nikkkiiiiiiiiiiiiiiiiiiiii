@@ -16,6 +16,9 @@ const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '1x000000000000
 const globalSession = { stopRequested: false };
 const poolMap = new Map();
 
+// Helper delay function
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // Express Configuration
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -67,10 +70,14 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 6, // Aligned with 6-batch processing
+      maxConnections: 6, // 6 parallel connections
       maxMessages: 4800,
       socketTimeout: 30000,
-      connectionTimeout: 30000
+      connectionTimeout: 30000,
+      tls: {
+        rejectUnauthorized: true,
+        minVersion: 'TLSv1.2'
+      }
     });
     poolMap.set(key, transporter);
   }
@@ -78,7 +85,7 @@ function getPort587Transporter(email, appPassword) {
 }
 
 /* ==========================================================================
-   RECIPIENT NORMALIZATION & SPINTAX RESOLVER
+   RECIPIENT NORMALIZATION, SPINTAX & INBOX HASH UTILS
    ========================================================================== */
 function parseRecipientData(input) {
   let email = '';
@@ -143,6 +150,16 @@ function parseSpintax(text) {
     iterations++;
   }
   return spun.replace(/[\{\}]/g, '').trim();
+}
+
+// Bypasses spam engine identical-content hash tracking
+function generateZeroWidthSalt() {
+  const chars = ['\u200B', '\u200C', '\u200D', '\uFEFF'];
+  let salt = '';
+  for (let i = 0; i < 6; i++) {
+    salt += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return salt;
 }
 
 function personalizeContent(template, recipient) {
@@ -219,7 +236,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   STREAMING DISPATCH ROUTE (6 Emails Per Batch)
+   STREAMING DISPATCH ROUTE (Inbox Optimized 6-Batch Engine)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -254,7 +271,7 @@ app.post('/api/send-stream', async (req, res) => {
   }, 4000);
 
   const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 6; // Exact 6 emails per batch
+  const BATCH_SIZE = 6;
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -264,7 +281,10 @@ app.post('/api/send-stream', async (req, res) => {
 
     const batch = recipients.slice(i, i + BATCH_SIZE);
 
-    const sendPromises = batch.map(async (rawRecipient) => {
+    const sendPromises = batch.map(async (rawRecipient, idx) => {
+      // Small 50ms stagger inside the batch to avoid triggering simultaneous rate limits
+      if (idx > 0) await delay(idx * 50);
+
       const recipient = parseRecipientData(rawRecipient);
       if (!recipient.email) return { success: false, recipient: '', error: 'Invalid Email' };
 
@@ -273,27 +293,36 @@ app.post('/api/send-stream', async (req, res) => {
         const personalizedBody = personalizeContent(messageBody, recipient);
         const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
 
-        // 2-line top gap + 15px font + #0f172a deep dark text
-        let formattedHtml = '';
-        if (isHtml) {
-          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody}</div>`;
-        } else {
-          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
-        }
+        const salt = generateZeroWidthSalt();
 
-        const plainTextFormatted = `\n\n${createPlainTextFromHtml(formattedHtml)}`;
+        let innerBody = isHtml 
+          ? personalizedBody 
+          : personalizedBody.replace(/\n/g, '<br>');
+
+        const formattedHtml = `<div style="font-family: Arial, sans-serif; font-size: 14px; color: #111111; line-height: 1.6; padding-top: 12px;">${innerBody}</div>${salt}`;
+        const plainTextFormatted = createPlainTextFromHtml(formattedHtml) + salt;
+
+        // Custom Message ID domain alignment to look like native client
+        const domain = cleanEmail.split('@')[1] || 'gmail.com';
+        const customMsgId = `<${Date.now()}.${Math.random().toString(36).substring(2, 9)}@${domain}>`;
 
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
           to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
           replyTo: cleanEmail,
-          subject: personalizedSubject || 'No Subject',
+          subject: (personalizedSubject || 'Notice') + salt,
           html: formattedHtml,
-          text: plainTextFormatted
+          text: plainTextFormatted,
+          headers: {
+            'Message-ID': customMsgId,
+            'X-Mailer': 'GmailClient',
+            'X-Priority': '3'
+          },
+          date: new Date()
         };
 
-        await transporter.sendMail(mailOptions);
-        return { success: true, recipient: recipient.email, name: recipient.name };
+        const info = await transporter.sendMail(mailOptions);
+        return { success: true, recipient: recipient.email, name: recipient.name, id: info.messageId };
 
       } catch (err) {
         return { success: false, recipient: recipient.email, error: err.message };
@@ -310,8 +339,8 @@ app.post('/api/send-stream', async (req, res) => {
 
     // Delay between 6-email batches
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(350 + Math.random() * 50);
-      await new Promise(resolve => setTimeout(resolve, batchDelay));
+      const batchDelay = Math.floor(350 + Math.random() * 100);
+      await delay(batchDelay);
     }
   }
 
