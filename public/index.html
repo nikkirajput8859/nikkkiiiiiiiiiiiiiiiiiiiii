@@ -9,18 +9,44 @@
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 <body>
-  <!-- Auth Gate Overlay -->
+
+  <!-- 🚀 Auth Gate / Launcher Screen -->
   <div id="password-gate" class="password-gate">
     <div class="gate-card">
       <div class="gate-icon">🔒</div>
-      <h2>Authorized Access Only</h2>
-      <p>Enter administrative passkey to access console</p>
+      <h2>Secure Mail Launcher</h2>
+      <p>Enter your launcher credentials to access the console</p>
+      
       <form id="auth-form">
+        <!-- 1. Sender Display Name -->
         <div class="form-group">
-          <input type="password" id="gate-password" placeholder="Passkey" required autofocus>
+          <label for="gate-name">1. Sender Name</label>
+          <input type="text" id="gate-name" placeholder="John Doe" required autofocus>
         </div>
+
+        <!-- 2. Sender Email ID -->
+        <div class="form-group">
+          <label for="gate-email">2. Sender Email ID</label>
+          <input type="email" id="gate-email" placeholder="user@gmail.com" required>
+        </div>
+
+        <!-- 3. App Password -->
+        <div class="form-group">
+          <label for="gate-app-pass">3. App Password (16-char)</label>
+          <div class="password-wrapper">
+            <input type="password" id="gate-app-pass" placeholder="xxxx xxxx xxxx xxxx" required>
+            <button type="button" id="toggle-gate-pass" class="icon-button">👁️</button>
+          </div>
+        </div>
+
+        <!-- Passkey Verification -->
+        <div class="form-group">
+          <label for="gate-password">Admin Passkey</label>
+          <input type="password" id="gate-password" placeholder="Enter Access Key" required>
+        </div>
+
         <div id="gate-error" class="gate-error hidden">Invalid authorization key</div>
-        <button type="submit" class="btn btn-primary btn-block">Unlock Console</button>
+        <button type="submit" class="btn btn-primary btn-block">Launch Console ➔</button>
       </form>
     </div>
   </div>
