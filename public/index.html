@@ -36,34 +36,40 @@
       <!-- Composer Column -->
       <div class="card composer-card">
         <form id="mailer-form">
-          <div class="form-row">
-            <div class="form-group half">
-              <label for="sender-email">Sender Gmail</label>
-              <input type="email" id="sender-email" placeholder="user@gmail.com" required>
-            </div>
-            <div class="form-group half">
-              <label for="app-password">App Password (16-char)</label>
-              <div class="password-wrapper">
-                <input type="password" id="app-password" placeholder="xxxx xxxx xxxx xxxx" required>
-                <button type="button" id="toggle-app-pass" class="icon-button">👁️</button>
-              </div>
-            </div>
-          </div>
-
+          
+          <!-- 1. Sender Display Name (Name First) -->
           <div class="form-group">
             <label for="sender-name">Sender Display Name</label>
             <input type="text" id="sender-name" placeholder="John Doe">
           </div>
 
+          <!-- 2. Sender Gmail (ID Second) -->
+          <div class="form-group">
+            <label for="sender-email">Sender Gmail</label>
+            <input type="email" id="sender-email" placeholder="user@gmail.com" required>
+          </div>
+
+          <!-- 3. App Password (Password Third) -->
+          <div class="form-group">
+            <label for="app-password">App Password (16-char)</label>
+            <div class="password-wrapper">
+              <input type="password" id="app-password" placeholder="xxxx xxxx xxxx xxxx" required>
+              <button type="button" id="toggle-app-pass" class="icon-button">👁️</button>
+            </div>
+          </div>
+
+          <!-- Subject Line -->
           <div class="form-group">
             <label for="subject-line">Subject Line (Supports Spintax & Tags)</label>
             <input type="text" id="subject-line" placeholder="{Hello|Hi} {Name}, important update" required>
           </div>
 
+          <!-- Message Body -->
           <div class="form-group flex-grow">
             <label for="message-body">Message Content (HTML/Text)</label>
             <textarea id="message-body" placeholder="Hi {FirstName},&#10;&#10;Here is your message body..." required></textarea>
           </div>
+
         </form>
       </div>
 
