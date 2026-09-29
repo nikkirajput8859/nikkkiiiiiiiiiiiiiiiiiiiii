@@ -1,1 +1,5 @@
-.gitignore
+node_modules/
+.env
+.ds_store
+dist/
+.wrangler/
