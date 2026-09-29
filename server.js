@@ -23,9 +23,8 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Helper: Spam detection से बचने के लिए डिले
+// Helper: डिले फ़ंक्शन
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const getRandomDelay = (min = 2500, max = 4500) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 /* ==========================================================================
    TURNSTILE BOT PROTECTION VERIFICATION
@@ -72,7 +71,7 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 2, // Safe connection limit for Gmail
+      maxConnections: 6, // 6 समानांतर (parallel) ईमेल्स के लिए कनेक्शन लिमिट 6 रखी गई है
       maxMessages: 100,
       socketTimeout: 30000,
       connectionTimeout: 30000
@@ -224,7 +223,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   STREAMING DISPATCH ROUTE (Safe Multi-Batch Sending)
+   STREAMING DISPATCH ROUTE (6 Emails Batch & 1 Second Gap)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -252,6 +251,7 @@ app.post('/api/send-stream', async (req, res) => {
 
   const cleanEmail = email.toLowerCase().trim();
   const cleanSenderName = (senderName || '').replace(/["\r\n]/g, '').trim();
+  const domainHost = cleanEmail.split('@')[1] || 'gmail.com';
   globalSession.stopRequested = false;
 
   const keepAlivePing = setInterval(() => {
@@ -260,8 +260,10 @@ app.post('/api/send-stream', async (req, res) => {
 
   const transporter = getPort587Transporter(email, appPassword);
   
-  // Safe limit: 2 emails per batch to prevent rate limiting
-  const BATCH_SIZE = 2; 
+  // एक साथ 6 मेल सेंड करने के लिए बैच साइज़ 6 सेट किया गया है
+  const BATCH_SIZE = 6; 
+  // बैचेस के बीच में 1 सेकंड (1000ms) का गैप
+  const GAP_DELAY = 1000; 
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -280,19 +282,20 @@ app.post('/api/send-stream', async (req, res) => {
         const personalizedBody = personalizeContent(messageBody, recipient);
         const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
 
-        // यूनिक सिग्नेचर (Duplicate Filter Bypass)
+        // यूनिक रिफ़रेंस कोड (Spam/Duplicate bypass)
         const uniqueMsgId = crypto.randomBytes(8).toString('hex');
         const uniqueNum = Math.floor(100000 + Math.random() * 900000);
         const timestamp = new Date().toISOString();
 
-        const uniqueFooterHtml = `<br/><br/><div style="font-size: 10px; color: #888888; opacity: 0.5; display: none !important;">Ref: ${uniqueMsgId}-${uniqueNum} | ${timestamp}</div>`;
-        const uniqueFooterText = `\n\n[Ref: ${uniqueMsgId}-${uniqueNum}]`;
+        // Inbox placement सुधारने के लिए साफ़ सुथरा फूटर
+        const uniqueFooterHtml = `<br/><br/><p style="font-size: 11px; color: #94a3b8; margin-top: 15px;">Ref: ${uniqueMsgId}-${uniqueNum}</p>`;
+        const uniqueFooterText = `\n\nRef: ${uniqueMsgId}-${uniqueNum}`;
 
         let formattedHtml = '';
         if (isHtml) {
-          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody}${uniqueFooterHtml}</div>`;
+          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65;">${personalizedBody}${uniqueFooterHtml}</div>`;
         } else {
-          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody.replace(/\n/g, '<br>')}${uniqueFooterHtml}</div>`;
+          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65;">${personalizedBody.replace(/\n/g, '<br>')}${uniqueFooterHtml}</div>`;
         }
 
         const plainTextFormatted = `${createPlainTextFromHtml(personalizedBody)}${uniqueFooterText}`;
@@ -305,10 +308,9 @@ app.post('/api/send-stream', async (req, res) => {
           html: formattedHtml,
           text: plainTextFormatted,
           headers: {
-            'X-Mailer': 'Secure Console v2.0',
             'X-Priority': '3',
             'X-MSMail-Priority': 'Normal',
-            'Message-ID': `<${uniqueMsgId}.${Date.now()}@gmail.com>`,
+            'Message-ID': `<${uniqueMsgId}.${Date.now()}@${domainHost}>`,
             'List-Unsubscribe': `<mailto:${cleanEmail}?subject=unsubscribe>`
           }
         };
@@ -329,10 +331,9 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
-    // इन्बॉक्स डिलीवरी सुरक्षित करने के लिए 2.5 - 4.5 सेकंड का स्मार्ट डिले
+    // प्रत्येक 6 मेल भेजने के बाद 1 सेकंड का गैप
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = getRandomDelay(2500, 4500);
-      await sleep(batchDelay);
+      await sleep(GAP_DELAY);
     }
   }
 
