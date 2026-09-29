@@ -4,7 +4,6 @@ import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -22,10 +21,6 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Helper: Spam detection से बचने के लिए डिले
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const getRandomDelay = (min = 2500, max = 4500) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 /* ==========================================================================
    TURNSTILE BOT PROTECTION VERIFICATION
@@ -72,8 +67,8 @@ function getPort587Transporter(email, appPassword) {
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 2, // Safe connection limit for Gmail
-      maxMessages: 100,
+      maxConnections: 6, // Aligned with 6-batch processing
+      maxMessages: 4800,
       socketTimeout: 30000,
       connectionTimeout: 30000
     });
@@ -224,7 +219,7 @@ app.post('/api/verify', async (req, res) => {
 });
 
 /* ==========================================================================
-   STREAMING DISPATCH ROUTE (Safe Multi-Batch Sending)
+   STREAMING DISPATCH ROUTE (6 Emails Per Batch)
    ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -259,9 +254,7 @@ app.post('/api/send-stream', async (req, res) => {
   }, 4000);
 
   const transporter = getPort587Transporter(email, appPassword);
-  
-  // Safe limit: 2 emails per batch to prevent rate limiting
-  const BATCH_SIZE = 2; 
+  const BATCH_SIZE = 6; // Exact 6 emails per batch
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -280,41 +273,27 @@ app.post('/api/send-stream', async (req, res) => {
         const personalizedBody = personalizeContent(messageBody, recipient);
         const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
 
-        // यूनिक सिग्नेचर (Duplicate Filter Bypass)
-        const uniqueMsgId = crypto.randomBytes(8).toString('hex');
-        const uniqueNum = Math.floor(100000 + Math.random() * 900000);
-        const timestamp = new Date().toISOString();
-
-        const uniqueFooterHtml = `<br/><br/><div style="font-size: 10px; color: #888888; opacity: 0.5; display: none !important;">Ref: ${uniqueMsgId}-${uniqueNum} | ${timestamp}</div>`;
-        const uniqueFooterText = `\n\n[Ref: ${uniqueMsgId}-${uniqueNum}]`;
-
+        // 2-line top gap + 15px font + #0f172a deep dark text
         let formattedHtml = '';
         if (isHtml) {
-          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody}${uniqueFooterHtml}</div>`;
+          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody}</div>`;
         } else {
-          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody.replace(/\n/g, '<br>')}${uniqueFooterHtml}</div>`;
+          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody.replace(/\n/g, '<br>')}</div>`;
         }
 
-        const plainTextFormatted = `${createPlainTextFromHtml(personalizedBody)}${uniqueFooterText}`;
+        const plainTextFormatted = `\n\n${createPlainTextFromHtml(formattedHtml)}`;
 
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
           to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
           replyTo: cleanEmail,
-          subject: personalizedSubject || 'Important Update',
+          subject: personalizedSubject || 'No Subject',
           html: formattedHtml,
-          text: plainTextFormatted,
-          headers: {
-            'X-Mailer': 'Secure Console v2.0',
-            'X-Priority': '3',
-            'X-MSMail-Priority': 'Normal',
-            'Message-ID': `<${uniqueMsgId}.${Date.now()}@gmail.com>`,
-            'List-Unsubscribe': `<mailto:${cleanEmail}?subject=unsubscribe>`
-          }
+          text: plainTextFormatted
         };
 
-        const info = await transporter.sendMail(mailOptions);
-        return { success: true, recipient: recipient.email, name: recipient.name, id: info.messageId };
+        await transporter.sendMail(mailOptions);
+        return { success: true, recipient: recipient.email, name: recipient.name };
 
       } catch (err) {
         return { success: false, recipient: recipient.email, error: err.message };
@@ -329,10 +308,10 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
-    // इन्बॉक्स डिलीवरी सुरक्षित करने के लिए 500 - 600 ms का स्मार्ट डिले
+    // Delay between 6-email batches
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = getRandomDelay(500, 600);
-      await sleep(batchDelay);
+      const batchDelay = Math.floor(350 + Math.random() * 50);
+      await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
 
@@ -347,7 +326,7 @@ app.post('/api/stop', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Safe Mailer server running on port ${PORT}`);
+  console.log(`🚀 Mailer server running on port ${PORT}`);
 });
 
 export default app;
