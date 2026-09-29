@@ -1,6 +1,6 @@
 export default {
   async fetch(request, env, ctx) {
-    return new Response("Secure Mail Worker Running", {
+    return new Response("Secure Mail Worker Endpoint", {
       headers: { "content-type": "text/plain" },
     });
   },
