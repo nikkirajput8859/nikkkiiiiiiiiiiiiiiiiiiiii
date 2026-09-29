@@ -10,37 +10,18 @@
 </head>
 <body>
 
-  <!-- 🚀 Auth Gate / Launcher Screen -->
+  <!-- Auth Gate Overlay (लॉन्चर) -->
   <div id="password-gate" class="password-gate">
     <div class="gate-card">
       <div class="gate-icon">🔒</div>
       <h2>Authorized Access Only</h2>
-      <p>Enter your launcher credentials to access console</p>
-      
+      <p>Enter passkey to access console</p>
       <form id="auth-form">
-        <!-- 1. Sender Display Name -->
         <div class="form-group">
-          <label for="gate-name">Sender Name</label>
-          <input type="text" id="gate-name" placeholder="John Doe" required autofocus>
+          <input type="password" id="gate-password" placeholder="Passkey" required autofocus>
         </div>
-
-        <!-- 2. Sender ID (Email) -->
-        <div class="form-group">
-          <label for="gate-email">Sender Gmail / User ID</label>
-          <input type="email" id="gate-email" placeholder="user@gmail.com" required>
-        </div>
-
-        <!-- 3. App Password -->
-        <div class="form-group">
-          <label for="gate-app-pass">App Password (16-char)</label>
-          <div class="password-wrapper">
-            <input type="password" id="gate-app-pass" placeholder="xxxx xxxx xxxx xxxx" required>
-            <button type="button" id="toggle-gate-pass" class="icon-button">👁️</button>
-          </div>
-        </div>
-
-        <div id="gate-error" class="gate-error hidden">Invalid authorization key or details</div>
-        <button type="submit" class="btn btn-primary btn-block">Unlock & Launch Console</button>
+        <div id="gate-error" class="gate-error hidden">Invalid authorization key</div>
+        <button type="submit" class="btn btn-primary btn-block">Unlock Console</button>
       </form>
     </div>
   </div>
@@ -53,51 +34,61 @@
     </header>
 
     <div class="dashboard-grid">
-      <!-- Composer Column -->
+      
+      <!-- Left Column: Sequential Form Fields -->
       <div class="card composer-card">
         <form id="mailer-form">
-          <div class="form-row">
-            <div class="form-group half">
-              <label for="sender-email">Sender Gmail</label>
-              <input type="email" id="sender-email" placeholder="user@gmail.com" required>
-            </div>
-            <div class="form-group half">
-              <label for="app-password">App Password (16-char)</label>
-              <div class="password-wrapper">
-                <input type="password" id="app-password" placeholder="xxxx xxxx xxxx xxxx" required>
-                <button type="button" id="toggle-app-pass" class="icon-button">👁️</button>
-              </div>
+          
+          <!-- Step 1: Sender Display Name -->
+          <div class="form-group">
+            <label for="sender-name">1. Sender Display Name</label>
+            <input type="text" id="sender-name" placeholder="John Doe" required>
+          </div>
+
+          <!-- Step 2: Sender Email/ID -->
+          <div class="form-group">
+            <label for="sender-email">2. Sender Gmail / ID</label>
+            <input type="email" id="sender-email" placeholder="user@gmail.com" required>
+          </div>
+
+          <!-- Step 3: App Password -->
+          <div class="form-group">
+            <label for="app-password">3. App Password (16-char)</label>
+            <div class="password-wrapper">
+              <input type="password" id="app-password" placeholder="xxxx xxxx xxxx xxxx" required>
+              <button type="button" id="toggle-app-pass" class="icon-button">👁️</button>
             </div>
           </div>
 
+          <!-- Step 4: Email Subject -->
           <div class="form-group">
-            <label for="sender-name">Sender Display Name</label>
-            <input type="text" id="sender-name" placeholder="John Doe">
-          </div>
-
-          <div class="form-group">
-            <label for="subject-line">Subject Line (Supports Spintax & Tags)</label>
+            <label for="subject-line">4. Email Subject Line (Supports Spintax & Tags)</label>
             <input type="text" id="subject-line" placeholder="{Hello|Hi} {Name}, important update" required>
           </div>
 
+          <!-- Step 5: Message Content -->
           <div class="form-group flex-grow">
-            <label for="message-body">Message Content (HTML/Text)</label>
+            <label for="message-body">5. Message Content (HTML/Text)</label>
             <textarea id="message-body" placeholder="Hi {FirstName},&#10;&#10;Here is your message body..." required></textarea>
           </div>
+
         </form>
       </div>
 
-      <!-- Controls & Recipients Column -->
+      <!-- Right Column: Step 6 Recipients & Sending Controls -->
       <div class="right-column">
+        
+        <!-- Step 6: Recipients List -->
         <div class="card recipients-card">
           <div class="card-header-flex">
-            <label for="recipients-input">Recipients List</label>
+            <label for="recipients-input">6. Recipients List</label>
             <span id="recipient-count-badge" class="badge">0 Total</span>
           </div>
           <p class="help-subtext">Formats: email@domain.com, "Name" &lt;email@domain.com&gt;, or CSV</p>
           <textarea id="recipients-input" placeholder="john@example.com&#10;Jane Doe &lt;jane@example.com&gt;" required></textarea>
         </div>
 
+        <!-- Dashboard Stats & Action Controls -->
         <div class="card stats-card">
           <div class="stats-grid">
             <div class="stat-box neutral">
@@ -131,7 +122,9 @@
             <button id="btn-stop" class="btn btn-danger flex-1" disabled>Stop</button>
           </div>
         </div>
+
       </div>
+
     </div>
   </div>
 
