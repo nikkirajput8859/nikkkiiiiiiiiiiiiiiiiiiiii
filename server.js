@@ -1,22 +1,15 @@
 import 'dotenv/config';
 import express from 'express';
-import http from 'http';
-import { Server } from 'socket.io';
 import nodemailer from 'nodemailer';
 import cors from 'cors';
 import path from 'path';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
+import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET', 'POST'] }
-});
-
 const PORT = process.env.PORT || 3000;
 const SITE_PASSWORD = process.env.SITE_PASSWORD || 'Y##';
 const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '1x0000000000000000000000000000000AA';
@@ -24,16 +17,19 @@ const TURNSTILE_SECRET_KEY = process.env.TURNSTILE_SECRET_KEY || '1x000000000000
 const globalSession = { stopRequested: false };
 const poolMap = new Map();
 
+// Express Configuration
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
-app.use(express.static(path.join(process.cwd(), 'public')));
 app.use(express.static(path.join(__dirname, 'public')));
 
-io.on('connection', (socket) => {
-  socket.on('disconnect', () => {});
-});
+// Helper: Spam detection से बचने के लिए डिले
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const getRandomDelay = (min = 2500, max = 4500) => Math.floor(Math.random() * (max - min + 1)) + min;
 
+/* ==========================================================================
+   TURNSTILE BOT PROTECTION VERIFICATION
+   ========================================================================== */
 async function verifyTurnstileToken(token, remoteIp) {
   if (!token || TURNSTILE_SECRET_KEY.startsWith('1x0000000000000000000000000000000AA')) {
     return true;
@@ -52,37 +48,43 @@ async function verifyTurnstileToken(token, remoteIp) {
     });
     const outcome = await result.json();
     return outcome.success === true;
-  } catch {
+  } catch (error) {
     return false;
   }
 }
 
+/* ==========================================================================
+   GMAIL TLS TRANSPORTER POOL (Port 587 STARTTLS)
+   ========================================================================== */
 function getPort587Transporter(email, appPassword) {
   const cleanEmail = email.toLowerCase().trim();
   const cleanPass = appPassword.replace(/\s+/g, '').trim();
-  const key = `inbox_pro_${cleanEmail}_${cleanPass}`;
+  const key = `port587_${cleanEmail}_${cleanPass}`;
 
   if (!poolMap.has(key)) {
     const transporter = nodemailer.createTransport({
       host: 'smtp.gmail.com',
       port: 587,
-      secure: false,
+      secure: false, // STARTTLS
       requireTLS: true,
       auth: {
         user: cleanEmail,
         pass: cleanPass
       },
       pool: true,
-      maxConnections: 6,
-      maxMessages: 700000,
-      socketTimeout: 350000,
-      connectionTimeout: 350000
+      maxConnections: 2, // Safe connection limit for Gmail
+      maxMessages: 100,
+      socketTimeout: 30000,
+      connectionTimeout: 30000
     });
     poolMap.set(key, transporter);
   }
   return poolMap.get(key);
 }
 
+/* ==========================================================================
+   RECIPIENT NORMALIZATION & SPINTAX RESOLVER
+   ========================================================================== */
 function parseRecipientData(input) {
   let email = '';
   let rawName = '';
@@ -119,11 +121,14 @@ function parseRecipientData(input) {
     ? rawName.split(/\s+/).map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
     : '';
 
+  const firstName = formattedName ? formattedName.split(' ')[0] : '';
+  const domain = email.includes('@') ? email.split('@')[1] : '';
+
   return {
     email: email.toLowerCase(),
     name: formattedName,
-    firstName: formattedName ? formattedName.split(' ')[0] : '',
-    domain: email.includes('@') ? email.split('@')[1] : ''
+    firstName: firstName,
+    domain: domain
   };
 }
 
@@ -133,7 +138,7 @@ function parseSpintax(text) {
   const regex = /\{([^{}]+)\}/s;
   let iterations = 0;
 
-  while (regex.test(spun) && iterations < 35) {
+  while (regex.test(spun) && iterations < 30) {
     spun = spun.replace(regex, (_, choices) => {
       if (!choices.includes('|')) return choices;
       const options = choices.split('|');
@@ -145,28 +150,25 @@ function parseSpintax(text) {
   return spun.replace(/[\{\}]/g, '').trim();
 }
 
-function sanitizeText(text) {
-  if (!text) return '';
-  return String(text).trim().replace(/^[\s!?,.-]+/g, '').trim();
-}
-
 function personalizeContent(template, recipient) {
   if (!template) return '';
   let content = parseSpintax(template);
-  const fallback = recipient.firstName || recipient.name || 'there';
 
-  content = content.replace(/{Name}/gi, recipient.name || fallback);
-  content = content.replace(/{FirstName}/gi, recipient.firstName || fallback);
-  content = content.replace(/{First_Name}/gi, recipient.firstName || fallback);
+  const displayName = recipient.name || recipient.firstName || '';
+  const displayFirstName = recipient.firstName || displayName || '';
+
+  content = content.replace(/{Name}/gi, displayName ? displayName : 'there');
+  content = content.replace(/{FirstName}/gi, displayFirstName ? displayFirstName : 'there');
+  content = content.replace(/{First_Name}/gi, displayFirstName ? displayFirstName : 'there');
   content = content.replace(/{Email}/gi, recipient.email);
   content = content.replace(/{Domain}/gi, recipient.domain);
 
-  return sanitizeText(content);
+  return content;
 }
 
-function createCleanPlainText(text) {
-  if (!text) return '';
-  return text
+function createPlainTextFromHtml(html) {
+  if (!html) return '';
+  return html
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<br\s*[\/]?>/gi, '\n')
@@ -180,6 +182,13 @@ function createCleanPlainText(text) {
     .replace(/\n\s*\n/g, '\n\n')
     .trim();
 }
+
+/* ==========================================================================
+   API ROUTES
+   ========================================================================== */
+app.get('/', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 
 app.post('/api/auth', (req, res) => {
   const { password } = req.body;
@@ -214,12 +223,14 @@ app.post('/api/verify', async (req, res) => {
   }
 });
 
+/* ==========================================================================
+   STREAMING DISPATCH ROUTE (Safe Multi-Batch Sending)
+   ========================================================================== */
 app.post('/api/send-stream', async (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
-  res.flushHeaders?.();
 
   const { email, appPassword, senderName, subject, messageBody, recipients, cfToken } = req.body;
   const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
@@ -244,11 +255,13 @@ app.post('/api/send-stream', async (req, res) => {
   globalSession.stopRequested = false;
 
   const keepAlivePing = setInterval(() => {
-    try { res.write(': keep-alive\n\n'); } catch {}
-  }, 3000);
+    res.write(': keep-alive\n\n');
+  }, 4000);
 
   const transporter = getPort587Transporter(email, appPassword);
-  const BATCH_SIZE = 6;
+  
+  // Safe limit: 2 emails per batch to prevent rate limiting
+  const BATCH_SIZE = 2; 
 
   for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
     if (globalSession.stopRequested) {
@@ -258,45 +271,53 @@ app.post('/api/send-stream', async (req, res) => {
 
     const batch = recipients.slice(i, i + BATCH_SIZE);
 
-    const sendPromises = batch.map(async (rawRecipient, idx) => {
+    const sendPromises = batch.map(async (rawRecipient) => {
       const recipient = parseRecipientData(rawRecipient);
       if (!recipient.email) return { success: false, recipient: '', error: 'Invalid Email' };
 
       try {
-        if (idx > 0) {
-          await new Promise(resolve => setTimeout(resolve, Math.floor(250 + Math.random() * 100)));
+        const personalizedSubject = personalizeContent(subject, recipient);
+        const personalizedBody = personalizeContent(messageBody, recipient);
+        const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
+
+        // यूनिक सिग्नेचर (Duplicate Filter Bypass)
+        const uniqueMsgId = crypto.randomBytes(8).toString('hex');
+        const uniqueNum = Math.floor(100000 + Math.random() * 900000);
+        const timestamp = new Date().toISOString();
+
+        const uniqueFooterHtml = `<br/><br/><div style="font-size: 10px; color: #888888; opacity: 0.5; display: none !important;">Ref: ${uniqueMsgId}-${uniqueNum} | ${timestamp}</div>`;
+        const uniqueFooterText = `\n\n[Ref: ${uniqueMsgId}-${uniqueNum}]`;
+
+        let formattedHtml = '';
+        if (isHtml) {
+          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody}${uniqueFooterHtml}</div>`;
+        } else {
+          formattedHtml = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 15px; color: #0f172a; line-height: 1.65; padding-top: 24px;">${personalizedBody.replace(/\n/g, '<br>')}${uniqueFooterHtml}</div>`;
         }
 
-        const personalizedSubject = personalizeContent(subject, recipient) || 'Quick note';
-        const personalizedBody = personalizeContent(messageBody, recipient);
-        const hasHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
-
-        const cleanRawText = createCleanPlainText(personalizedBody);
-        const plainTextFormatted = `\n${cleanRawText}`;
-        const cleanHtmlFormatted = `<div dir="ltr" style="font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #1a1a1a; line-height: 1.55; margin-top: 14px; padding-top: 2px;">${hasHtml ? personalizedBody : cleanRawText.replace(/\n/g, '<br>')}</div>`;
+        const plainTextFormatted = `${createPlainTextFromHtml(personalizedBody)}${uniqueFooterText}`;
 
         const mailOptions = {
           from: cleanSenderName ? `"${cleanSenderName}" <${cleanEmail}>` : cleanEmail,
           to: recipient.name ? `"${recipient.name}" <${recipient.email}>` : recipient.email,
           replyTo: cleanEmail,
-          date: new Date(),
-          subject: personalizedSubject,
-          html: cleanHtmlFormatted,
+          subject: personalizedSubject || 'Important Update',
+          html: formattedHtml,
           text: plainTextFormatted,
-          textEncoding: 'quoted-printable',
-          encoding: 'utf-8'
+          headers: {
+            'X-Mailer': 'Secure Console v2.0',
+            'X-Priority': '3',
+            'X-MSMail-Priority': 'Normal',
+            'Message-ID': `<${uniqueMsgId}.${Date.now()}@gmail.com>`,
+            'List-Unsubscribe': `<mailto:${cleanEmail}?subject=unsubscribe>`
+          }
         };
 
-        await transporter.sendMail(mailOptions);
-        
-        const payload = { success: true, recipient: recipient.email, name: recipient.name };
-        io.emit('mail_sent', payload);
-        return payload;
+        const info = await transporter.sendMail(mailOptions);
+        return { success: true, recipient: recipient.email, name: recipient.name, id: info.messageId };
 
       } catch (err) {
-        const errPayload = { success: false, recipient: recipient.email, error: err.message };
-        io.emit('mail_error', errPayload);
-        return errPayload;
+        return { success: false, recipient: recipient.email, error: err.message };
       }
     });
 
@@ -308,9 +329,10 @@ app.post('/api/send-stream', async (req, res) => {
       }
     }
 
+    // इन्बॉक्स डिलीवरी सुरक्षित करने के लिए 2.5 - 4.5 सेकंड का स्मार्ट डिले
     if (i + BATCH_SIZE < recipients.length) {
-      const batchDelay = Math.floor(1200 + Math.random() * 600);
-      await new Promise(resolve => setTimeout(resolve, batchDelay));
+      const batchDelay = getRandomDelay(2500, 4500);
+      await sleep(batchDelay);
     }
   }
 
@@ -324,22 +346,8 @@ app.post('/api/stop', (req, res) => {
   res.json({ success: true, message: 'Sending process stopped' });
 });
 
-app.get('*', (req, res) => {
-  const filePath1 = path.join(__dirname, 'public', 'index.html');
-  const filePath2 = path.join(process.cwd(), 'public', 'index.html');
-
-  if (fs.existsSync(filePath1)) {
-    return res.sendFile(filePath1);
-  } else if (fs.existsSync(filePath2)) {
-    return res.sendFile(filePath2);
-  }
-  return res.status(200).send('<h1>Server Running</h1>');
+app.listen(PORT, () => {
+  console.log(`🚀 Safe Mailer server running on port ${PORT}`);
 });
-
-if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
-  server.listen(PORT, () => {
-    console.log(`🚀 Mailer server running on port ${PORT}`);
-  });
-}
 
 export default app;
