@@ -22,9 +22,8 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Helper: 2 से 5 सेकंड का रैंडम डिले (Spam Detection से बचने के लिए)
+// Helper: समय रोकने के लिए (Sleep Function)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const getRandomDelay = (min = 2000, max = 5000) => Math.floor(Math.random() * (max - min + 1)) + min;
 
 // Helper: HTML से टेक्स्ट में कन्वर्ट करना (Dual Version के लिए)
 function stripHtml(html) {
@@ -68,9 +67,8 @@ function getTransporter(email, appPassword) {
       requireTLS: true,
       auth: { user: cleanEmail, pass: cleanPass },
       pool: true,
-      maxConnections: 1, // Gmail रिस्ट्रिक्शन से बचने के लिए
-      maxMessages: 50,
-      rateLimit: 1 // दर नियंत्रित रखें
+      maxConnections: 1, // Gmail कनेक्शन लिमिट के लिए
+      maxMessages: 50
     });
     poolMap.set(key, transporter);
   }
@@ -205,12 +203,11 @@ app.post('/api/send-stream', async (req, res) => {
       let personalizedBody = personalizeContent(messageBody, recipient);
       const isHtml = /<[a-z][\s\S]*>/i.test(personalizedBody);
 
-      // 1. हर ईमेल में यूनिक आइडेंटिफ़ायर (Signature) जोड़ना
+      // यूनिक आइडेंटिफ़ायर (Signature)
       const uniqueMsgId = crypto.randomBytes(8).toString('hex');
       const uniqueNum = Math.floor(100000 + Math.random() * 900000);
       const timestamp = new Date().toISOString();
 
-      // इनबॉक्स डिलीवरी बढ़ाने के लिए नीचे यूनिक फुटर जोड़ा जाता है
       const uniqueFooterHtml = `<br/><br/><div style="font-size: 10px; color: #888888; opacity: 0.6; display: none !important;">Ref: ${uniqueMsgId}-${uniqueNum} | ${timestamp}</div>`;
       const uniqueFooterText = `\n\n[Ref Code: ${uniqueMsgId}-${uniqueNum}]`;
 
@@ -225,7 +222,6 @@ app.post('/api/send-stream', async (req, res) => {
         finalText = personalizedBody + uniqueFooterText;
       }
 
-      // 2. इनबॉक्स डिलीवरी वाले सुरक्षित ईमेल हेडर सेटिंग्स
       const mailOptions = {
         from: senderName ? `"${senderName.replace(/"/g, '')}" <${email}>` : email,
         to: recipient.name ? `"${recipient.name.replace(/"/g, '')}" <${recipient.email}>` : recipient.email,
@@ -244,16 +240,15 @@ app.post('/api/send-stream', async (req, res) => {
       const info = await transporter.sendMail(mailOptions);
       res.write(`data: ${JSON.stringify({ success: true, recipient: recipient.email, id: info.messageId })}\n\n`);
 
-      // 3. स्पैम फ़िल्टर से बचने के लिए 2.5s से 5s का डिले (Throttling Delay)
+      // ⚡ सेंडिंग स्पीड: हर ईमेल के बाद ठीक 1 सेकंड (1000 ms) का गैप
       if (i < recipients.length - 1) {
-        const delay = getRandomDelay(2500, 5000);
-        await sleep(delay);
+        await sleep(1000);
       }
 
     } catch (err) {
       res.write(`data: ${JSON.stringify({ success: false, recipient: recipient.email, error: err.message })}\n\n`);
-      // त्रुटि आने पर भी 2 सेकंड रुकें
-      await sleep(2000);
+      // एरर आने पर 1 सेकंड का इंतज़ार
+      await sleep(1000);
     }
   }
 
