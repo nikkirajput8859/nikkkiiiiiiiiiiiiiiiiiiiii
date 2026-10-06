@@ -11,16 +11,19 @@ import urllib.request
 import urllib.parse
 from flask import Flask, render_template, request, response_class, redirect, url_for, session
 
-# Dynamic absolute path handling for Vercel Serverless environment
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TEMPLATE_DIR = os.path.join(BASE_DIR, 'templates')
-STATIC_DIR = os.path.join(BASE_DIR, 'static')
+# टेम्पलेट और स्टैटिक फोल्डर के लिए एब्सोल्यूट पाथ
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(CURRENT_DIR)
+
+TEMPLATE_DIR = os.path.join(PROJECT_ROOT, 'templates')
+STATIC_DIR = os.path.join(PROJECT_ROOT, 'static')
 
 if not os.path.exists(TEMPLATE_DIR):
-    TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+    TEMPLATE_DIR = os.path.join(CURRENT_DIR, 'templates')
 if not os.path.exists(STATIC_DIR):
-    STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+    STATIC_DIR = os.path.join(CURRENT_DIR, 'static')
 
+# Flask ऐप इनिशियलाइजेशन
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "secure_mail_console_secret_key_2026")
 
@@ -155,7 +158,7 @@ def send_batch():
             yield json.dumps({"type": "progress", "total": total, "sent": sent, "failed": failed, "remaining": remaining}) + "\n"
 
             if index < total - 1:
-                time.sleep(random.uniform(1.0, 2.0))
+                time.sleep(random.uniform(1.0, 1.8))
 
         try:
             server.quit()
@@ -165,6 +168,9 @@ def send_batch():
         yield json.dumps({"type": "complete", "total": total, "sent": sent, "failed": failed, "remaining": 0, "message": "All emails processed successfully."}) + "\n"
 
     return response_class(generate_events(), mimetype='application/x-ndjson')
+
+# Vercel के लिए WSGI हैंडलर
+handler = app
 
 if __name__ == '__main__':
     app.run(debug=True)
