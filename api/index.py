@@ -11,7 +11,17 @@ import urllib.request
 import urllib.parse
 from flask import Flask, render_template, request, response_class, redirect, url_for, session
 
-app = Flask(__name__, template_folder='../templates', static_folder='../static')
+# Dynamic absolute path handling for Vercel Serverless environment
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TEMPLATE_DIR = os.path.join(BASE_DIR, 'templates')
+STATIC_DIR = os.path.join(BASE_DIR, 'static')
+
+if not os.path.exists(TEMPLATE_DIR):
+    TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+if not os.path.exists(STATIC_DIR):
+    STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+
+app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "secure_mail_console_secret_key_2026")
 
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "admin123")
@@ -19,7 +29,6 @@ TURNSTILE_SITE_KEY = os.environ.get("TURNSTILE_SITE_KEY", "")
 TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 
 def spin_text(text):
-    """Recursively processes spintax formatting {option1|option2|...}"""
     if not text:
         return ""
     pattern = re.compile(r'\{([^{}]+)\}')
@@ -33,7 +42,6 @@ def spin_text(text):
     return text
 
 def verify_turnstile(token, ip):
-    """Verifies Cloudflare Turnstile token"""
     if not TURNSTILE_SECRET_KEY:
         return True
     if not token:
@@ -53,7 +61,6 @@ def verify_turnstile(token, ip):
         return False
 
 def strip_html(html):
-    """Converts basic HTML to plain text for MIME alternative fallback"""
     text = re.sub(r'<br\s*/?>', '\n', html, flags=re.IGNORECASE)
     text = re.sub(r'</p>', '\n\n', text, flags=re.IGNORECASE)
     text = re.sub(r'<[^>]+>', '', text)
@@ -131,7 +138,6 @@ def send_batch():
                 msg['Date'] = formatdate(localtime=True)
                 msg['Message-ID'] = make_msgid(domain=gmail.split('@')[-1] if '@' in gmail else 'gmail.com')
                 msg['X-Mailer'] = 'SecureMailConsole/2.0'
-                msg['Auto-Submitted'] = 'auto-generated'
 
                 if is_html:
                     plain_fallback = strip_html(curr_body)
@@ -148,9 +154,8 @@ def send_batch():
             remaining = total - (sent + failed)
             yield json.dumps({"type": "progress", "total": total, "sent": sent, "failed": failed, "remaining": remaining}) + "\n"
 
-            # Randomized delay (1.2 to 2.5s) to avoid spam filters and rate limiting
             if index < total - 1:
-                time.sleep(random.uniform(1.2, 2.5))
+                time.sleep(random.uniform(1.0, 2.0))
 
         try:
             server.quit()
