@@ -12,9 +12,11 @@ import urllib.request
 import urllib.parse
 import secrets
 import random
+import time
 
 from email.mime.text import MIMEText
-from email.utils import formataddr
+from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr, make_msgid, formatdate
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,7 +31,6 @@ app = Flask(
 app.secret_key = os.environ.get("SESSION_SECRET", "default-secret-key-change-me")
 
 MAX_RECIPIENTS = 25
-
 TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 
 EMAIL_RE = re.compile(
@@ -55,7 +56,6 @@ def expand_spintax(text):
         if len(options) < 2:
             return match.group(0)
         return random.choice(options)
-
     return SPINTAX_RE.sub(replace_match, text)
 
 def verify_turnstile(token, remote_ip=None):
@@ -69,12 +69,10 @@ def verify_turnstile(token, remote_ip=None):
         "secret": TURNSTILE_SECRET_KEY,
         "response": token
     }
-
     if remote_ip:
         payload["remoteip"] = remote_ip
 
     encoded = urllib.parse.urlencode(payload).encode("utf-8")
-
     req = urllib.request.Request(
         "https://challenges.cloudflare.com/turnstile/v0/siteverify",
         data=encoded,
@@ -85,10 +83,8 @@ def verify_turnstile(token, remote_ip=None):
     try:
         with urllib.request.urlopen(req, timeout=10) as response:
             result = json.loads(response.read().decode("utf-8"))
-
         if result.get("success") is True:
             return True, None
-
         return False, "Cloudflare verification failed."
     except Exception:
         return False, "Unable to verify Cloudflare."
@@ -142,20 +138,8 @@ def send_batch():
     recipients = data.get("recipients", [])
     turnstile_token = str(data.get("turnstile_token", "")).strip()
 
-    if not sender_name:
-        return jsonify({"success": False, "message": "Sender Name is required."}), 400
-
-    if not valid_email(gmail):
-        return jsonify({"success": False, "message": "Enter a valid Gmail address."}), 400
-
-    if not app_password:
-        return jsonify({"success": False, "message": "Google App Password is required."}), 400
-
-    if not subject:
-        return jsonify({"success": False, "message": "Email subject is required."}), 400
-
-    if not body.strip():
-        return jsonify({"success": False, "message": "Message body is required."}), 400
+    if not sender_name or not valid_email(gmail) or not app_password or not subject or not body.strip():
+        return jsonify({"success": False, "message": "All fields are required and must be valid."}), 400
 
     if not isinstance(recipients, list):
         return jsonify({"success": False, "message": "Invalid recipient list."}), 400
@@ -163,9 +147,7 @@ def send_batch():
     clean_recipients = []
     for item in recipients:
         email = str(item).strip().lower()
-        if not valid_email(email):
-            continue
-        if email not in clean_recipients:
+        if valid_email(email) and email not in clean_recipients:
             clean_recipients.append(email)
 
     clean_recipients = clean_recipients[:MAX_RECIPIENTS]
@@ -189,29 +171,38 @@ def send_batch():
         remaining = total
 
         yield json.dumps({
-            "type": "start",
-            "total": total,
-            "sent": 0,
-            "failed": 0,
-            "remaining": total
+            "type": "start", "total": total, "sent": 0, "failed": 0, "remaining": total
         }) + "\n"
 
         context = ssl.create_default_context()
 
         try:
+            # Reusing connection for batch, but with rate limit delays
             with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=15) as server:
                 server.login(gmail, app_password)
 
-                for recipient in clean_recipients:
+                for index, recipient in enumerate(clean_recipients):
                     try:
                         final_subject = expand_spintax(subject)
                         final_body = expand_spintax(body)
 
-                        content_type = "html" if is_html else "plain"
-                        message = MIMEText(final_body, content_type, "utf-8")
+                        # Create a secure and standard MIME format
+                        message = MIMEMultipart("alternative") if is_html else MIMEText(final_body, "plain", "utf-8")
                         message["Subject"] = final_subject
                         message["From"] = formataddr((sender_name, gmail))
                         message["To"] = recipient
+                        
+                        # Anti-spam essential headers
+                        message["Message-ID"] = make_msgid(domain=gmail.split('@')[1])
+                        message["Date"] = formatdate(localtime=True)
+                        message["Reply-To"] = gmail
+
+                        if is_html:
+                            # Attach both plain text and HTML for better spam score
+                            part1 = MIMEText("Please view this email in an HTML compatible client.", "plain", "utf-8")
+                            part2 = MIMEText(final_body, "html", "utf-8")
+                            message.attach(part1)
+                            message.attach(part2)
 
                         server.sendmail(gmail, [recipient], message.as_string())
 
@@ -219,90 +210,39 @@ def send_batch():
                         remaining -= 1
 
                         yield json.dumps({
-                            "type": "progress",
-                            "email": recipient,
-                            "result": "sent",
-                            "total": total,
-                            "sent": sent_count,
-                            "failed": failed_count,
-                            "remaining": remaining
+                            "type": "progress", "email": recipient, "result": "sent",
+                            "total": total, "sent": sent_count, "failed": failed_count, "remaining": remaining
                         }) + "\n"
+
+                        # Small delay to prevent Gmail rate-limiting (very important for inboxing)
+                        if index < len(clean_recipients) - 1:
+                            time.sleep(random.uniform(1.5, 3.5))
 
                     except Exception as exc:
                         failed_count += 1
                         remaining -= 1
-
                         yield json.dumps({
-                            "type": "progress",
-                            "email": recipient,
-                            "result": "failed",
-                            "error": str(exc),
-                            "total": total,
-                            "sent": sent_count,
-                            "failed": failed_count,
-                            "remaining": remaining
+                            "type": "progress", "email": recipient, "result": "failed", "error": str(exc),
+                            "total": total, "sent": sent_count, "failed": failed_count, "remaining": remaining
                         }) + "\n"
 
         except smtplib.SMTPAuthenticationError:
-            yield json.dumps({
-                "type": "error",
-                "message": "Gmail authentication failed. Check Gmail and App Password.",
-                "total": total,
-                "sent": sent_count,
-                "failed": failed_count,
-                "remaining": remaining
-            }) + "\n"
+            yield json.dumps({"type": "error", "message": "Gmail authentication failed. Check App Password."}) + "\n"
             return
-
-        except smtplib.SMTPException as exc:
-            yield json.dumps({
-                "type": "error",
-                "message": f"SMTP connection error: {str(exc)}",
-                "total": total,
-                "sent": sent_count,
-                "failed": failed_count,
-                "remaining": remaining
-            }) + "\n"
-            return
-
         except Exception as exc:
-            yield json.dumps({
-                "type": "error",
-                "message": f"Server error: {str(exc)}",
-                "total": total,
-                "sent": sent_count,
-                "failed": failed_count,
-                "remaining": remaining
-            }) + "\n"
+            yield json.dumps({"type": "error", "message": f"Server error: {str(exc)}"}) + "\n"
             return
 
         yield json.dumps({
-            "type": "complete",
-            "success": True,
-            "message": "sending compleate Babu❤️",
-            "total": total,
-            "sent": sent_count,
-            "failed": failed_count,
-            "remaining": remaining
+            "type": "complete", "success": True, "message": "Sending complete.",
+            "total": total, "sent": sent_count, "failed": failed_count, "remaining": remaining
         }) + "\n"
 
-    return Response(
-        generate(),
-        content_type="application/x-ndjson; charset=utf-8",
-        headers={
-            "Cache-Control": "no-cache, no-transform",
-            "X-Accel-Buffering": "no"
-        }
-    )
+    return Response(generate(), content_type="application/x-ndjson; charset=utf-8", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 @app.route("/health")
 def health():
-    return jsonify({
-        "status": "ok",
-        "service": "Secure Mail Console",
-        "mailer": "Gmail SMTP",
-        "spintax": "always_on"
-    })
+    return jsonify({"status": "ok", "service": "Secure Mail Console"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
