@@ -1,26 +1,20 @@
 from flask import (
     Flask, render_template, request, jsonify,
-    redirect, url_for, session, Response,
-    stream_with_context
+    redirect, url_for, session
 )
 import smtplib
 import ssl
 import re
 import os
 import json
-import urllib.request
-import urllib.parse
 import secrets
 import random
-import time
-import html
-
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr, make_msgid, formatdate
 from pathlib import Path
 
-# Vercel Serverless Path Configuration
+# Base Path Setup
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 templates_path = BASE_DIR / "templates"
@@ -33,91 +27,39 @@ app = Flask(
     static_url_path="/static"
 )
 
-application = app
-handler = app
+app.secret_key = os.environ.get("SESSION_SECRET", "default-secret-key-12345")
 
-app.secret_key = os.environ.get("SESSION_SECRET", "default-secret-key-change-me")
-
-# Batch limit reduced to stay within Vercel's 10-second timeout limit
 MAX_RECIPIENTS = 15
-TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
+EMAIL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$")
 
-EMAIL_RE = re.compile(
-    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
-    r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
-)
 
 def valid_email(value):
     if not value or not isinstance(value, str):
         return False
     return bool(EMAIL_RE.fullmatch(value.strip()))
 
+
 def authenticated():
     return session.get("authenticated") is True
 
-def strip_html_tags(html_text):
-    """HTML content se plain text fallback banata hai taaki spam filters pass ho sakein."""
-    if not html_text:
-        return ""
-    text = re.sub(r'<style[^>]*>[\s\S]*?</style>', '', html_text, flags=re.IGNORECASE)
-    text = re.sub(r'<script[^>]*>[\s\S]*?</script>', '', text, flags=re.IGNORECASE)
-    text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'</p>', '\n\n', text, flags=re.IGNORECASE)
-    text = re.sub(r'<[^>]+>', '', text)
-    text = html.unescape(text)
-    return text.strip()
 
 SPINTAX_RE = re.compile(r"\{([^{}]+)\}")
+
 
 def expand_spintax(text):
     if not text:
         return ""
+
     def replace_match(match):
-        options = [
-            option.strip()
-            for option in match.group(1).split("|")
-            if option.strip()
-        ]
-        if not options:
-            return ""
-        return random.choice(options)
-    
+        options = [opt.strip() for opt in match.group(1).split("|") if opt.strip()]
+        return random.choice(options) if options else ""
+
     prev = None
     while prev != text:
         prev = text
         text = SPINTAX_RE.sub(replace_match, text)
     return text
 
-def verify_turnstile(token, remote_ip=None):
-    if not TURNSTILE_SECRET_KEY:
-        return True, None
-
-    if not token:
-        return False, "Cloudflare verification is required."
-
-    payload = {
-        "secret": TURNSTILE_SECRET_KEY,
-        "response": token
-    }
-    if remote_ip:
-        payload["remoteip"] = remote_ip
-
-    encoded = urllib.parse.urlencode(payload).encode("utf-8")
-    req = urllib.request.Request(
-        "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-        data=encoded,
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        method="POST"
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=5) as response:
-            result = json.loads(response.read().decode("utf-8"))
-        if result.get("success") is True:
-            return True, None
-        return False, "Cloudflare verification failed."
-    except Exception:
-        return True, None  # Prevent complete failure if turnstile API is slow
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -137,10 +79,12 @@ def login():
 
     return render_template("login.html", error=error)
 
+
 @app.route("/logout")
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
 
 @app.route("/")
 def home():
@@ -152,10 +96,11 @@ def home():
         turnstile_site_key=os.environ.get("TURNSTILE_SITE_KEY", "")
     )
 
+
 @app.route("/send-batch", methods=["POST"])
 def send_batch():
     if not authenticated():
-        return jsonify({"success": False, "message": "Authentication required."}), 200
+        return jsonify({"success": False, "message": "Authentication required."}), 401
 
     data = request.get_json(silent=True) or {}
 
@@ -166,56 +111,58 @@ def send_batch():
     body = str(data.get("body", ""))
     is_html = bool(data.get("is_html", False))
     recipients = data.get("recipients", [])
-    turnstile_token = str(data.get("turnstile_token", "") or data.get("cf-turnstile-response", "")).strip()
 
     if not sender_name or not valid_email(gmail) or not app_password or not subject or not body.strip():
-        return jsonify({"success": False, "message": "All fields are required and must be valid."}), 200
-
-    if not isinstance(recipients, list):
-        return jsonify({"success": False, "message": "Invalid recipient list."}), 200
+        return jsonify({"success": False, "message": "Sabhi fields bharne zaruri hain."}), 400
 
     clean_recipients = []
-    for item in recipients:
-        email = str(item).strip().lower()
-        if valid_email(email) and email not in clean_recipients:
-            clean_recipients.append(email)
+    if isinstance(recipients, list):
+        for item in recipients:
+            email = str(item).strip().lower()
+            if valid_email(email) and email not in clean_recipients:
+                clean_recipients.append(email)
 
     clean_recipients = clean_recipients[:MAX_RECIPIENTS]
 
     if not clean_recipients:
-        return jsonify({"success": False, "message": "No valid recipients found."}), 200
+        return jsonify({"success": False, "message": "Koi valid recipient email nahi milis."}), 400
 
-    client_ip = request.headers.get("X-Forwarded-For", request.remote_addr)
-    if client_ip and "," in client_ip:
-        client_ip = client_ip.split(",")[0].strip()
+    sent_count = 0
+    failed_count = 0
 
-    verified, verify_error = verify_turnstile(turnstile_token, client_ip)
-    if not verified:
-        return jsonify({"success": False, "message": verify_error}), 200
+    context = ssl.create_default_context()
 
-    @stream_with_context
-    def generate():
-        total = len(clean_recipients)
-        sent_count = 0
-        failed_count = 0
-        remaining = total
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=8) as server:
+            server.login(gmail, app_password)
 
-        yield json.dumps({
-            "type": "start", "total": total, "sent": 0, "failed": 0, "remaining": total
-        }) + "\n"
+            for recipient in clean_recipients:
+                try:
+                    final_subject = expand_spintax(subject)
+                    final_body = expand_spintax(body)
 
-        context = ssl.create_default_context()
+                    if is_html:
+                        message = MIMEMultipart("alternative")
+                        message.attach(MIMEText(final_body, "html", "utf-8"))
+                    else:
+                        message = MIMEText(final_body, "plain", "utf-8")
 
-        try:
-            with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context, timeout=10) as server:
-                server.login(gmail, app_password)
+                    domain = gmail.split("@")[-1] if "@" in gmail else "gmail.com"
+                    message["Subject"] = final_subject
+                    message["From"] = formataddr((sender_name, gmail))
+                    message["To"] = recipient
+                    message["Reply-To"] = gmail
+                    message["Message-ID"] = make_msgid(domain=domain)
+                    message["Date"] = formatdate(localtime=True)
 
-                for index, recipient in enumerate(clean_recipients):
-                    try:
-                        final_subject = expand_spintax(subject)
-                        final_body = expand_spintax(body)
+                    server.sendmail(gmail, [recipient], message.as_string())
+                    sent_count += 1
+                except Exception:
+                    failed_count += 1
 
-                        domain = gmail.split("@")[-1] if "@" in gmail else "gmail.com"
-
-                        if is_html:
-                            message = MIMEMultipart("alternative")
+        return jsonify({
+            "success": True,
+            "message": "Emails sent successfully.",
+            "total": len(clean_recipients),
+            "sent": sent_count,
+            "failed": failed
