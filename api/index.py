@@ -39,7 +39,8 @@ handler = app
 
 app.secret_key = os.environ.get("SESSION_SECRET", "default-secret-key-12345")
 
-MAX_RECIPIENTS = 15
+# Limit increased to 500 so all pasted emails get sent
+MAX_RECIPIENTS = 500
 TURNSTILE_SECRET_KEY = os.environ.get("TURNSTILE_SECRET_KEY", "")
 
 EMAIL_RE = re.compile(
@@ -98,7 +99,7 @@ def verify_turnstile(token: str, remote_ip: str = None) -> tuple[bool, str]:
         return True, None
 
     if not token:
-        return False, "Cloudflare captcha verification is required."
+        return False, "Cloudflare verification is required."
 
     payload = {
         "secret": TURNSTILE_SECRET_KEY,
@@ -189,6 +190,7 @@ def send_batch():
         if valid_email(email) and email not in clean_recipients:
             clean_recipients.append(email)
 
+    # Process all recipients up to 500
     clean_recipients = clean_recipients[:MAX_RECIPIENTS]
 
     if not clean_recipients:
@@ -257,8 +259,9 @@ def send_batch():
                             "total": total, "sent": sent_count, "failed": failed_count, "remaining": remaining
                         }) + "\n"
 
+                        # Fast execution delay (0.1 second)
                         if index < len(clean_recipients) - 1:
-                            time.sleep(0.4)
+                            time.sleep(0.1)
 
                     except Exception as exc:
                         failed_count += 1
