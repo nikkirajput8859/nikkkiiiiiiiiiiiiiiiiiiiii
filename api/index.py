@@ -4,9 +4,19 @@ import ssl
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.utils import formataddr, formatdate, make_msgid
+from pathlib import Path
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for
 
-app = Flask(__name__)
+# Root directory path definition for Vercel
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+app = Flask(
+    __name__,
+    template_folder=str(BASE_DIR / "templates"),
+    static_folder=str(BASE_DIR / "static"),
+    static_url_path="/static"
+)
+
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "default-safe-secret-key")
 
 # Standard configuration via Environment Variables
@@ -16,24 +26,57 @@ SMTP_USER = os.environ.get("SMTP_USER", "")
 SMTP_PASS = os.environ.get("SMTP_PASS", "")
 SENDER_NAME = os.environ.get("SENDER_NAME", "Support Team")
 
+# Authentication Check Helper
+def is_authenticated():
+    return session.get("authenticated") is True
+
 # =========================================================
 # ROUTES
 # =========================================================
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if is_authenticated():
+        return redirect(url_for("home"))
+
+    error = None
+    if request.method == "POST":
+        password = str(request.form.get("password", ""))
+        configured_password = os.environ.get("LOGIN_PASSWORD", "")
+
+        if not configured_password:
+            error = "LOGIN_PASSWORD environment variable is not configured."
+        elif password == configured_password:
+            session["authenticated"] = True
+            return redirect(url_for("home"))
+        else:
+            error = "Incorrect password."
+
+    return render_template("login.html", error=error)
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
 @app.route("/")
 def home():
+    if not is_authenticated():
+        return redirect(url_for("login"))
+
     return render_template("index.html")
 
 @app.route("/send-transactional", methods=["POST"])
 def send_transactional():
+    if not is_authenticated():
+        return jsonify({"success": False, "message": "Authentication required."}), 401
+
     data = request.get_json(silent=True) or {}
-    
     recipient = str(data.get("recipient", "")).strip().lower()
     subject = str(data.get("subject", "")).strip()
     body = str(data.get("body", "")).strip()
     is_html = bool(data.get("is_html", False))
 
-    # Basic Validation
     if not recipient or "@" not in recipient:
         return jsonify({"success": False, "message": "Valid recipient email is required."}), 400
     if not subject or not body:
@@ -42,7 +85,6 @@ def send_transactional():
         return jsonify({"success": False, "message": "SMTP credentials not configured on server."}), 500
 
     try:
-        # Construct RFC-compliant Email Message
         msg = MIMEMultipart("alternative")
         msg["From"] = formataddr((SENDER_NAME, SMTP_USER))
         msg["To"] = recipient
@@ -55,7 +97,6 @@ def send_transactional():
         content_type = "html" if is_html else "plain"
         msg.attach(MIMEText(body, content_type, "utf-8"))
 
-        # Connect using SSL (Port 465)
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=15) as server:
             server.login(SMTP_USER, SMTP_PASS)
@@ -63,7 +104,7 @@ def send_transactional():
 
         return jsonify({
             "success": True, 
-            "message": "Email sent successfully to inbox.",
+            "message": "Email dispatched successfully.",
             "recipient": recipient
         })
 
@@ -74,7 +115,7 @@ def send_transactional():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "service": "Transactional Mailer"})
+    return jsonify({"status": "ok", "service": "Flask Mailer"})
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+# WSGI export for Vercel
+app_obj = app
