@@ -15,6 +15,7 @@ import random
 import time
 
 from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from email.utils import formataddr, make_msgid
 from pathlib import Path
 
@@ -36,7 +37,7 @@ app.secret_key = os.environ.get(
 )
 
 
-MAX_RECIPIENTS = 25
+MAX_RECIPIENTS = 50
 
 TURNSTILE_SECRET_KEY = os.environ.get(
     "TURNSTILE_SECRET_KEY",
@@ -502,11 +503,9 @@ def send_batch():
                         )
 
 
-                        message = MIMEText(
-                            final_body,
-                            content_type,
-                            "utf-8"
-                        )
+                        # Anti-Spam: Use MIMEMultipart for better delivery and reduced spam scores
+                        message = MIMEMultipart("alternative")
+                        message.attach(MIMEText(final_body, content_type, "utf-8"))
 
 
                         message["Subject"] = (
@@ -524,9 +523,11 @@ def send_batch():
 
                         message["To"] = recipient
                         
-                        # Anti-Spam: Unique Message-ID and proper headers to bypass filters
+                        # Anti-Spam Headers to bypass filters and land in inbox
                         message["Message-ID"] = make_msgid(domain=gmail.split('@')[1])
-                        message["X-Mailer"] = "SecureMailConsole/1.0"
+                        message["X-Mailer"] = "Microsoft Outlook 16.0"
+                        message["X-Priority"] = "3"
+                        message["Importance"] = "Normal"
 
 
                         server.sendmail(
@@ -552,8 +553,8 @@ def send_batch():
                             }) + "\n"
                         )
                         
-                        # Anti-Spam Safety Delay: Random pause between 1.5 to 3 seconds to protect client ID from getting flagged
-                        time.sleep(random.uniform(1.5, 3.0))
+                        # Optimized Fast & Safe Speed: Random delay between 0.5 to 1.2 seconds for quick execution without getting flagged
+                        time.sleep(random.uniform(0.5, 1.2))
 
 
                     except Exception as exc:
