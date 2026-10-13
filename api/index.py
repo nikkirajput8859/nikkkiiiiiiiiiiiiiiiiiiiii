@@ -16,7 +16,7 @@ import time
 
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-from email.utils import formataddr, make_msgid
+from email.utils import formataddr, make_msgid, formatdate
 from pathlib import Path
 
 
@@ -465,216 +465,119 @@ def send_batch():
 
         context = ssl.create_default_context()
 
+        for recipient in clean_recipients:
 
-        try:
+            try:
+                # Spintax permanently ON
+                final_subject = expand_spintax(
+                    subject
+                )
 
-            with smtplib.SMTP_SSL(
-                "smtp.gmail.com",
-                465,
-                context=context,
-                timeout=15
-            ) as server:
-
-
-                server.login(
-                    gmail,
-                    app_password
+                final_body = expand_spintax(
+                    body
                 )
 
 
-                for recipient in clean_recipients:
-
-                    try:
-
-                        # Spintax permanently ON
-                        final_subject = expand_spintax(
-                            subject
-                        )
-
-                        final_body = expand_spintax(
-                            body
-                        )
+                content_type = (
+                    "html"
+                    if is_html
+                    else "plain"
+                )
 
 
-                        content_type = (
-                            "html"
-                            if is_html
-                            else "plain"
-                        )
+                # Anti-Spam: MIMEMultipart structure with proper alternative parts
+                message = MIMEMultipart("alternative")
+                message.attach(MIMEText(final_body, content_type, "utf-8"))
 
 
-                        # Anti-Spam: Use MIMEMultipart for better delivery and reduced spam scores
-                        message = MIMEMultipart("alternative")
-                        message.attach(MIMEText(final_body, content_type, "utf-8"))
+                message["Subject"] = (
+                    final_subject
+                )
 
 
-                        message["Subject"] = (
-                            final_subject
-                        )
+                message["From"] = formataddr(
+                    (
+                        sender_name,
+                        gmail
+                    )
+                )
 
 
-                        message["From"] = formataddr(
-                            (
-                                sender_name,
-                                gmail
-                            )
-                        )
+                message["To"] = recipient
+                
+                # Critical Anti-Spam Headers to bypass inbox filtering
+                message["Date"] = formatdate(localtime=True)
+                message["Message-ID"] = make_msgid(domain=gmail.split('@')[1])
+                message["X-Mailer"] = "Microsoft Outlook 16.0"
+                message["X-Priority"] = "3"
+                message["Importance"] = "Normal"
+                message["Feedback-ID"] = "1.us-east-1.123456:AmazonSES" # Standard tracking dummy header to prevent bulk tagging
 
 
-                        message["To"] = recipient
-                        
-                        # Anti-Spam Headers to bypass filters and land in inbox
-                        message["Message-ID"] = make_msgid(domain=gmail.split('@')[1])
-                        message["X-Mailer"] = "Microsoft Outlook 16.0"
-                        message["X-Priority"] = "3"
-                        message["Importance"] = "Normal"
+                # Establish a fresh secure connection per email to prevent bulk-sending blacklisting
+                with smtplib.SMTP_SSL(
+                    "smtp.gmail.com",
+                    465,
+                    context=context,
+                    timeout=15
+                ) as server:
+
+                    server.login(
+                        gmail,
+                        app_password
+                    )
+
+                    server.sendmail(
+                        gmail,
+                        [recipient],
+                        message.as_string()
+                    )
 
 
-                        server.sendmail(
-                            gmail,
-                            [recipient],
-                            message.as_string()
-                        )
+                sent_count += 1
+                remaining -= 1
 
 
-                        sent_count += 1
-                        remaining -= 1
+                yield (
+                    json.dumps({
+                        "type": "progress",
+                        "email": recipient,
+                        "result": "sent",
+                        "total": total,
+                        "sent": sent_count,
+                        "failed": failed_count,
+                        "remaining": remaining
+                    }) + "\n"
+                )
+                
+                # Safe Human-like Delay between individual connection sessions
+                time.sleep(random.uniform(1.2, 2.5))
 
 
-                        yield (
-                            json.dumps({
-                                "type": "progress",
-                                "email": recipient,
-                                "result": "sent",
-                                "total": total,
-                                "sent": sent_count,
-                                "failed": failed_count,
-                                "remaining": remaining
-                            }) + "\n"
-                        )
-                        
-                        # Optimized Fast & Safe Speed: Random delay between 0.5 to 1.2 seconds for quick execution without getting flagged
-                        time.sleep(random.uniform(0.5, 1.2))
+            except smtplib.SMTPAuthenticationError:
+
+                yield (
+                    json.dumps({
+                        "type": "error",
+                        "message":
+                        "Gmail authentication failed. Check Gmail and App Password.",
+                        "total": total,
+                        "sent": sent_count,
+                        "failed": failed_count,
+                        "remaining": remaining
+                    }) + "\n"
+                )
+
+                return
+
+            except Exception as exc:
+
+                failed_count += 1
+                remaining -= 1
 
 
-                    except Exception as exc:
-
-                        failed_count += 1
-                        remaining -= 1
-
-
-                        yield (
-                            json.dumps({
-                                "type": "progress",
-                                "email": recipient,
-                                "result": "failed",
-                                "error": str(exc),
-                                "total": total,
-                                "sent": sent_count,
-                                "failed": failed_count,
-                                "remaining": remaining
-                            }) + "\n"
-                        )
-
-
-        except smtplib.SMTPAuthenticationError:
-
-            yield (
-                json.dumps({
-                    "type": "error",
-                    "message":
-                    "Gmail authentication failed. Check Gmail and App Password.",
-                    "total": total,
-                    "sent": sent_count,
-                    "failed": failed_count,
-                    "remaining": remaining
-                }) + "\n"
-            )
-
-            return
-
-
-        except smtplib.SMTPException as exc:
-
-            yield (
-                json.dumps({
-                    "type": "error",
-                    "message":
-                    f"SMTP connection error: {str(exc)}",
-                    "total": total,
-                    "sent": sent_count,
-                    "failed": failed_count,
-                    "remaining": remaining
-                }) + "\n"
-            )
-
-            return
-
-
-        except Exception as exc:
-
-            yield (
-                json.dumps({
-                    "type": "error",
-                    "message":
-                    f"Server error: {str(exc)}",
-                    "total": total,
-                    "sent": sent_count,
-                    "failed": failed_count,
-                    "remaining": remaining
-                }) + "\n"
-            )
-
-            return
-
-
-        yield (
-            json.dumps({
-                "type": "complete",
-                "success": True,
-                "message":
-                "sending compleate Babu❤️",
-                "total": total,
-                "sent": sent_count,
-                "failed": failed_count,
-                "remaining": remaining
-            }) + "\n"
-        )
-
-
-    return Response(
-        generate(),
-        content_type=(
-            "application/x-ndjson; charset=utf-8"
-        ),
-        headers={
-            "Cache-Control":
-            "no-cache, no-transform",
-            "X-Accel-Buffering":
-            "no"
-        }
-    )
-
-
-# =========================================================
-# HEALTH
-# =========================================================
-
-@app.route("/health")
-def health():
-
-    return jsonify({
-        "status": "ok",
-        "service": "Secure Mail Console",
-        "mailer": "Gmail SMTP",
-        "spintax": "always_on"
-    })
-
-
-if __name__ == "__main__":
-
-    app.run(
-        host="0.0.0.0",
-        port=5000,
-        debug=True
-    )
+                yield (
+                    json.dumps({
+                        "type": "progress",
+                        "email": recipient,
+                        "result": "failed",
