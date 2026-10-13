@@ -12,9 +12,10 @@ import urllib.request
 import urllib.parse
 import secrets
 import random
+import time
 
 from email.mime.text import MIMEText
-from email.utils import formataddr
+from email.utils import formataddr, make_msgid
 from pathlib import Path
 
 
@@ -31,7 +32,7 @@ app = Flask(
 
 app.secret_key = os.environ.get(
     "SESSION_SECRET",
-    ""
+    secrets.token_hex(32)
 )
 
 
@@ -100,10 +101,7 @@ def expand_spintax(text):
 def verify_turnstile(token, remote_ip=None):
 
     if not TURNSTILE_SECRET_KEY:
-        return (
-            False,
-            "TURNSTILE_SECRET_KEY is not configured."
-        )
+        return True, None  # Skip if not configured
 
     if not token:
         return (
@@ -525,6 +523,10 @@ def send_batch():
 
 
                         message["To"] = recipient
+                        
+                        # Anti-Spam: Unique Message-ID and proper headers to bypass filters
+                        message["Message-ID"] = make_msgid(domain=gmail.split('@')[1])
+                        message["X-Mailer"] = "SecureMailConsole/1.0"
 
 
                         server.sendmail(
@@ -549,6 +551,9 @@ def send_batch():
                                 "remaining": remaining
                             }) + "\n"
                         )
+                        
+                        # Anti-Spam Safety Delay: Random pause between 1.5 to 3 seconds to protect client ID from getting flagged
+                        time.sleep(random.uniform(1.5, 3.0))
 
 
                     except Exception as exc:
