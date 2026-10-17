@@ -1,825 +1,1070 @@
-* {
-    box-sizing: border-box;
-}
-
-body {
-    margin: 0;
-    font-family: Inter, Arial, sans-serif;
-    background: #f5f8fc;
-    color: #101a2d;
-}
-
-button,
-input,
-textarea {
-    font-family: inherit;
-}
-
-
-/* TOP */
-
-.topbar {
-    max-width: 1000px;
-    margin: auto;
-    height: 78px;
-
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.brand {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-}
+from flask import (
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    redirect,
+    url_for,
+    session,
+    Response,
+    stream_with_context,
+)
 
-.brand-icon {
-    color: #397ef6;
-    font-size: 31px;
-}
-
-.brand-title {
-    font-size: 29px;
-    font-weight: 800;
-
-    background:
-        linear-gradient(
-            90deg,
-            #3e82f5,
-            #7653e9
-        );
+import smtplib
+import ssl
+import re
+import os
+import json
+import urllib.request
+import urllib.parse
+import secrets
+import time
 
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-}
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.utils import formataddr, formatdate, make_msgid
+from pathlib import Path
 
-.logout-button {
-    text-decoration: none;
 
-    border: 1px solid #ffcaca;
-    background: #fff;
-    color: #ff4040;
+# =========================================================
+# APP CONFIGURATION
+# =========================================================
 
-    border-radius: 7px;
-    padding: 7px 13px;
+BASE_DIR = Path(__file__).resolve().parent.parent
 
-    font-size: 11px;
-    font-weight: 600;
-}
+app = Flask(
+    __name__,
+    template_folder=str(BASE_DIR / "templates"),
+    static_folder=str(BASE_DIR / "static"),
+    static_url_path="/static",
+)
 
+handler = app
 
-/* MAIN */
 
-.container {
-    max-width: 1000px;
-    margin: auto;
-    padding: 10px 0 45px;
-}
+# =========================================================
+# EXISTING VERCEL ENV VARIABLES
+# =========================================================
 
-.page-heading {
-    margin-bottom: 23px;
-}
+SESSION_SECRET = os.environ.get(
+    "SESSION_SECRET", ""
+).strip()
 
-.page-heading h1 {
-    margin: 0;
-    font-size: 22px;
-}
+TURNSTILE_SITE_KEY = os.environ.get(
+    "TURNSTILE_SITE_KEY", ""
+).strip()
 
-.page-heading h1 i {
-    margin-right: 6px;
-}
+TURNSTILE_SECRET_KEY = os.environ.get(
+    "TURNSTILE_SECRET_KEY", ""
+).strip()
 
-.dashboard-grid {
-    display: grid;
-    grid-template-columns: 1.04fr .96fr;
-    gap: 20px;
-}
+LOGIN_PASSWORD = os.environ.get(
+    "LOGIN_PASSWORD", ""
+).strip()
 
-.right-column {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-}
 
+if not SESSION_SECRET:
 
-/* CARD */
+    raise RuntimeError(
+        "SESSION_SECRET is not configured in Vercel."
+    )
 
-.card {
-    background: #fff;
-    border-radius: 11px;
-    border: 1px solid #e7ebf1;
+if not LOGIN_PASSWORD:
 
-    box-shadow:
-        0 5px 18px
-        rgba(30,55,90,.07);
+    raise RuntimeError(
+        "LOGIN_PASSWORD is not configured in Vercel."
+    )
 
-    padding: 29px;
-}
 
-.compose-card {
-    min-height: 665px;
-}
+app.secret_key = SESSION_SECRET
 
-.section-title {
-    display: flex;
-    align-items: center;
-    gap: 5px;
 
-    font-size: 17px;
-    font-weight: 800;
-}
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=3600,
+)
 
 
-/* FORM */
+# =========================================================
+# MAIL SETTINGS
+# =========================================================
 
-.two-column {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0 14px;
-}
+MAX_RECIPIENTS = 25
 
-.field {
-    margin-bottom: 17px;
-}
+SMTP_HOST = "smtp.gmail.com"
+SMTP_PORT = 465
+SMTP_TIMEOUT = 25
 
-.field label {
-    display: block;
+# Single connection throughput: ~70-80 mails per minute
+SEND_DELAY_SECONDS = 0.45
 
-    font-size: 11px;
-    font-weight: 700;
 
-    margin-bottom: 8px;
-}
+# =========================================================
+# EMAIL VALIDATION
+# =========================================================
 
-.field input {
-    width: 100%;
-    height: 42px;
+EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
+)
 
-    border: 1px solid #dce3ed;
-    border-radius: 7px;
 
-    padding: 0 13px;
+def valid_email(value):
 
-    outline: none;
-    font-size: 13px;
-}
+    if not isinstance(value, str):
+        return False
 
-.field input:focus,
-.field textarea:focus,
-.recipients-box:focus {
-    border-color: #7da9ef;
-}
+    value = value.strip()
 
+    if not value:
+        return False
 
-/* PASSWORD */
+    if len(value) > 254:
+        return False
 
-.password-field {
-    position: relative;
-}
+    return bool(EMAIL_RE.fullmatch(value))
 
-.password-field input {
-    padding-right: 42px;
-}
 
-.password-field button {
-    position: absolute;
+def normalize_email(value):
 
-    right: 4px;
-    top: 3px;
+    return str(value or "").strip().lower()
 
-    width: 34px;
-    height: 35px;
 
-    border: 0;
-    background: transparent;
+def authenticated():
 
-    color: #76859b;
-    cursor: pointer;
-}
+    return session.get("authenticated") is True
 
 
-/* BODY */
+def clean_header(value, max_length=998):
 
-.body-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
+    value = str(value or "")
 
-.mode-buttons {
-    display: flex;
-    gap: 4px;
-}
+    value = value.replace("\r", " ")
 
-.mode {
-    border: 1px solid #dce3ed;
-    background: #fff;
+    value = value.replace("\n", " ")
 
-    color: #78869a;
+    return value.strip()[:max_length]
 
-    border-radius: 5px;
-    padding: 4px 7px;
 
-    font-size: 9px;
-    cursor: pointer;
-}
+# =========================================================
+# PERSONALIZATION
+# =========================================================
 
-.mode.active {
-    background: #edf4ff;
-    color: #347af1;
-    border-color: #cfe1fc;
-}
+def personalize_template(template, recipient):
 
-.field textarea {
-    width: 100%;
+    result = str(template or "")
 
-    min-height: 264px;
+    values = {
+        "{{hi}}": str(
+            recipient.get("hi", "")
+            or ""
+        ),
 
-    resize: vertical;
+        "{{hello}}": str(
+            recipient.get("hello", "")
+            or ""
+        ),
 
-    margin-top: 8px;
+        "{{thanks}}": str(
+            recipient.get("thanks", "")
+            or ""
+        ),
 
-    border: 1px solid #dce3ed;
-    border-radius: 7px;
+        "{{name}}": str(
+            recipient.get("name", "")
+            or ""
+        ),
 
-    padding: 13px;
+        "{{email}}": str(
+            recipient.get("email", "")
+            or ""
+        ),
 
-    outline: none;
-
-    line-height: 1.55;
-    font-size: 13px;
-}
-
-
-/* SPINTAX */
-
-.spintax-status {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-
-    margin-bottom: 18px;
-    padding: 10px 12px;
-
-    border: 1px solid #e0eaf7;
-    border-radius: 8px;
-
-    background: #f7fbff;
-
-    color: #2773c7;
-}
-
-.spintax-status strong {
-    display: block;
-    font-size: 11px;
-}
-
-.spintax-status span {
-    display: block;
-
-    margin-top: 2px;
-
-    color: #8491a3;
-    font-size: 9px;
-}
-
-
-/* SECURITY */
-
-.security-title {
-    font-size: 12px;
-    font-weight: 700;
-
-    margin-bottom: 9px;
-}
-
-.security-box {
-    min-height: 91px;
-
-    display: flex;
-    align-items: center;
-}
-
-.turnstile-warning {
-    color: #c43d3d;
-    background: #fff1f1;
-
-    border: 1px solid #ffd3d3;
-
-    padding: 10px;
-    border-radius: 7px;
-
-    font-size: 10px;
-}
-
-
-/* RECIPIENTS */
-
-.count-badge {
-    margin-left: auto;
-
-    color: #4085ff;
-    background: #f0f6ff;
-
-    padding: 6px 9px;
-    border-radius: 20px;
-
-    font-size: 10px;
-    font-weight: 700;
-}
-
-.recipient-subtitle {
-    color: #6f829d;
-
-    font-size: 11px;
-
-    margin: 0 0 10px 22px;
-}
-
-.recipients-box {
-    width: 100%;
-    height: 135px;
-
-    resize: vertical;
-
-    border: 1px solid #dce3ed;
-    border-radius: 7px;
-
-    outline: none;
-
-    padding: 10px 13px;
-
-    font-size: 12px;
-}
-
-
-/* PROGRESS */
-
-.stats-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-
-    gap: 14px;
-
-    margin-top: 4px;
-}
-
-.stat-box {
-    height: 91px;
-
-    border: 1px solid #dce3ed;
-    border-radius: 7px;
-
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-}
-
-.stat-box span {
-    color: #657994;
-    font-size: 10px;
-    font-weight: 700;
-}
-
-.stat-box strong {
-    margin-top: 6px;
-
-    color: #397df3;
-    font-size: 25px;
-}
-
-.stat-box strong.green {
-    color: #08b979;
-}
-
-.stat-box strong.red {
-    color: #f34444;
-}
-
-.stat-box strong.orange {
-    color: #f09a00;
-}
-
-.progress-track {
-    height: 7px;
-    width: 100%;
-
-    background: #e4eaf1;
-
-    border-radius: 20px;
-
-    overflow: hidden;
-
-    margin-top: 21px;
-}
-
-.progress-fill {
-    height: 100%;
-    width: 0%;
-
-    background: #0fb67a;
-
-    transition: width .25s ease;
-}
-
-.status {
-    text-align: center;
-
-    margin-top: 17px;
-
-    min-height: 21px;
-
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.status.success {
-    color: #0b9e69;
-}
-
-.status.error {
-    color: #e13d3d;
-}
-
-
-/* BUTTONS */
-
-.send-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-
-    gap: 14px;
-
-    margin-top: 18px;
-}
-
-.send-button,
-.stop-button {
-    height: 40px;
-
-    border: 0;
-    border-radius: 7px;
-
-    color: #fff;
-
-    font-size: 12px;
-    font-weight: 700;
-
-    cursor: pointer;
-}
-
-.send-button {
-    background: #0db27a;
-}
-
-.stop-button {
-    background: #f23c3c;
-}
-
-.send-button:disabled,
-.stop-button:disabled {
-    opacity: .55;
-    cursor: not-allowed;
-}
-
-
-/* POPUP */
-
-.complete-modal {
-    position: fixed;
-    inset: 0;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    padding: 20px;
-
-    background: rgba(10,22,40,.38);
-
-    opacity: 0;
-    visibility: hidden;
-    pointer-events: none;
-
-    transition: .2s;
-
-    z-index: 1000;
-}
-
-.complete-modal.show {
-    opacity: 1;
-    visibility: visible;
-    pointer-events: auto;
-}
-
-.complete-box {
-    width: 100%;
-    max-width: 370px;
-
-    background: #fff;
-
-    border-radius: 15px;
-
-    padding: 31px 25px 25px;
-
-    text-align: center;
-
-    box-shadow:
-        0 20px 70px
-        rgba(15,35,65,.22);
-}
-
-.complete-icon {
-    width: 62px;
-    height: 62px;
-
-    margin: 0 auto 15px;
-
-    border-radius: 50%;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    background: #e9fff6;
-    color: #09b779;
-
-    font-size: 31px;
-}
-
-.complete-title {
-    font-size: 20px;
-    font-weight: 800;
-}
-
-.complete-details {
-    margin-top: 8px;
-
-    color: #75839a;
-    font-size: 12px;
-}
-
-.complete-button {
-    margin-top: 21px;
-
-    height: 38px;
-
-    padding: 0 20px;
-
-    border: 0;
-    border-radius: 7px;
-
-    background: #0db27a;
-    color: #fff;
-
-    font-size: 12px;
-    font-weight: 700;
-
-    cursor: pointer;
-}
-
-
-/* TOAST */
-
-.toast {
-    position: fixed;
-
-    right: 20px;
-    bottom: 20px;
-
-    max-width: 340px;
-
-    padding: 12px 15px;
-
-    background: #172033;
-    color: #fff;
-
-    border-radius: 7px;
-
-    font-size: 11px;
-
-    opacity: 0;
-
-    transform: translateY(8px);
-
-    pointer-events: none;
-
-    transition: .2s;
-
-    z-index: 1100;
-}
-
-.toast.show {
-    opacity: 1;
-
-    transform: translateY(0);
-}
-
-
-/* LOGIN */
-
-.login-page {
-    min-height: 100vh;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    padding: 20px;
-
-    background:
-        linear-gradient(
-            135deg,
-            #f4f8fd,
-            #edf4fc
-        );
-}
-
-.login-card {
-    width: 100%;
-    max-width: 410px;
-
-    background: #fff;
-
-    border: 1px solid #e4e9f0;
-
-    border-radius: 16px;
-
-    padding: 34px;
-
-    box-shadow:
-        0 18px 60px
-        rgba(33,65,105,.08);
-
-    text-align: center;
-}
-
-.login-logo {
-    width: 60px;
-    height: 60px;
-
-    margin: 0 auto 17px;
-
-    border-radius: 16px;
-
-    background: #eaf3ff;
-    color: #1677ff;
-
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
-    font-size: 27px;
-}
-
-.login-card h1 {
-    margin: 0;
-
-    font-size: 23px;
-}
-
-.login-subtitle {
-    margin: 8px 0 26px;
-
-    color: #8791a1;
-
-    font-size: 13px;
-}
-
-.login-card form {
-    text-align: left;
-}
-
-.login-card label {
-    display: block;
-
-    margin-bottom: 7px;
-
-    color: #3b4657;
-
-    font-size: 13px;
-    font-weight: 650;
-}
-
-.login-password {
-    position: relative;
-}
-
-.login-password input {
-    width: 100%;
-    height: 45px;
-
-    padding: 0 45px 0 13px;
-
-    border: 1px solid #dfe5ed;
-
-    border-radius: 9px;
-
-    outline: none;
-
-    font-size: 13px;
-}
-
-.login-password button {
-    position: absolute;
-
-    right: 5px;
-    top: 5px;
-
-    width: 35px;
-    height: 35px;
-
-    border: 0;
-
-    background: transparent;
-
-    color: #7b8695;
-
-    cursor: pointer;
-}
-
-.login-error {
-    margin-top: 12px;
-
-    padding: 10px;
-
-    border-radius: 8px;
-
-    background: #fff2f2;
-
-    color: #c43e3e;
-
-    font-size: 12px;
-}
-
-.login-button {
-    width: 100%;
-    height: 45px;
-
-    margin-top: 15px;
-
-    border: 0;
-    border-radius: 9px;
-
-    background: #1677ff;
-    color: #fff;
-
-    font-weight: 700;
-
-    cursor: pointer;
-}
-
-.login-footer {
-    margin-top: 25px;
-
-    padding-top: 18px;
-
-    border-top: 1px solid #edf0f4;
-
-    color: #929baa;
-
-    font-size: 11px;
-}
-
-
-/* RESPONSIVE */
-
-@media (max-width: 1050px) {
-
-    .topbar,
-    .container {
-        max-width: 94%;
-    }
-}
-
-@media (max-width: 850px) {
-
-    .dashboard-grid {
-        grid-template-columns: 1fr;
+        "{{ref_code}}": str(
+            recipient.get("ref_code", "")
+            or ""
+        ),
     }
 
-    .compose-card {
-        min-height: auto;
-    }
-}
+    for placeholder, value in values.items():
 
-@media (max-width: 600px) {
+        result = result.replace(
+            placeholder,
+            value,
+        )
 
-    .brand-title {
-        font-size: 21px;
+    return result
+
+
+# =========================================================
+# HTML TO PLAIN TEXT
+# =========================================================
+
+def html_to_plain_text(html):
+
+    text = str(html or "")
+
+    text = re.sub(
+        r"<br\s*/?>",
+        "\n",
+        text,
+        flags=re.I,
+    )
+
+    text = re.sub(
+        r"</p\s*>",
+        "\n\n",
+        text,
+        flags=re.I,
+    )
+
+    text = re.sub(
+        r"</div\s*>",
+        "\n",
+        text,
+        flags=re.I,
+    )
+
+    text = re.sub(
+        r"<[^>]+>",
+        "",
+        text,
+    )
+
+    replacements = {
+        "&nbsp;": " ",
+        "&amp;": "&",
+        "&lt;": "<",
+        "&gt;": ">",
+        "&quot;": '"',
+        "&#39;": "'",
     }
 
-    .two-column {
-        grid-template-columns: 1fr;
+    for old, new in replacements.items():
+
+        text = text.replace(old, new)
+
+    return text.strip()
+
+
+# =========================================================
+# TURNSTILE
+# =========================================================
+
+def verify_turnstile(token, remote_ip=None):
+
+    if not TURNSTILE_SECRET_KEY:
+
+        return (
+            False,
+            "TURNSTILE_SECRET_KEY is not configured.",
+        )
+
+    if not token:
+
+        return (
+            False,
+            "Cloudflare verification is required.",
+        )
+
+    payload = {
+        "secret": TURNSTILE_SECRET_KEY,
+        "response": token,
     }
 
-    .send-row {
-        grid-template-columns: 1fr;
+    if remote_ip:
+
+        payload["remoteip"] = remote_ip
+
+    encoded = urllib.parse.urlencode(
+        payload
+    ).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+        data=encoded,
+        headers={
+            "Content-Type":
+                "application/x-www-form-urlencoded"
+        },
+        method="POST",
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            req,
+            timeout=10,
+        ) as response:
+
+            result = json.loads(
+                response.read().decode("utf-8")
+            )
+
+        if result.get("success") is True:
+
+            return True, None
+
+        return (
+            False,
+            "Cloudflare verification failed.",
+        )
+
+    except Exception:
+
+        return (
+            False,
+            "Unable to verify Cloudflare.",
+        )
+
+
+# =========================================================
+# LOGIN
+# =========================================================
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+
+    if authenticated():
+
+        return redirect(url_for("home"))
+
+    if request.method == "GET":
+
+        return render_template(
+            "login.html",
+            error=None,
+            turnstile_site_key=TURNSTILE_SITE_KEY,
+        )
+
+    password = str(
+        request.form.get(
+            "password",
+            "",
+        )
+    )
+
+    if not secrets.compare_digest(
+        password,
+        LOGIN_PASSWORD,
+    ):
+
+        return render_template(
+            "login.html",
+            error="Incorrect password.",
+            turnstile_site_key=TURNSTILE_SITE_KEY,
+        ), 401
+
+    session.clear()
+
+    session.permanent = True
+
+    session["authenticated"] = True
+
+    return redirect(url_for("home"))
+
+
+# =========================================================
+# LOGOUT
+# =========================================================
+
+@app.route(
+    "/logout",
+    methods=["GET", "POST"],
+)
+def logout():
+
+    session.clear()
+
+    return redirect(
+        url_for("login")
+    )
+
+
+# =========================================================
+# HOME
+# =========================================================
+
+@app.route("/")
+def home():
+
+    if not authenticated():
+
+        return redirect(
+            url_for("login")
+        )
+
+    return render_template(
+        "index.html",
+        turnstile_site_key=TURNSTILE_SITE_KEY,
+    )
+
+
+# =========================================================
+# BUILD EMAIL
+# =========================================================
+
+def build_message(
+    gmail,
+    sender_name,
+    subject,
+    body,
+    is_html,
+    recipient,
+):
+
+    gmail = gmail.strip().lower()
+
+    recipient = recipient.strip()
+
+    sender_name = clean_header(
+        sender_name,
+        200,
+    )
+
+    subject = clean_header(
+        subject,
+        998,
+    )
+
+    body = str(
+        body or ""
+    ).replace(
+        "\x00",
+        "",
+    )
+
+    if is_html:
+
+        message = MIMEMultipart(
+            "alternative"
+        )
+
+        plain_body = html_to_plain_text(
+            body
+        )
+
+        message.attach(
+            MIMEText(
+                plain_body,
+                "plain",
+                "utf-8",
+            )
+        )
+
+        message.attach(
+            MIMEText(
+                body,
+                "html",
+                "utf-8",
+            )
+        )
+
+    else:
+
+        message = MIMEText(
+            body,
+            "plain",
+            "utf-8",
+        )
+
+    message["Subject"] = subject
+
+    message["From"] = formataddr(
+        (
+            sender_name,
+            gmail,
+        )
+    )
+
+    message["To"] = recipient
+
+    message["Date"] = formatdate(
+        localtime=True
+    )
+
+    domain_part = gmail.split("@")[1] if "@" in gmail else "gmail.com"
+
+    message["Message-ID"] = make_msgid(domain=domain_part)
+
+    return message
+
+
+# =========================================================
+# NORMALIZE RECIPIENT
+# =========================================================
+
+def normalize_recipient(item):
+
+    if isinstance(item, str):
+
+        return {
+            "email": normalize_email(item),
+            "name": "",
+            "hi": "",
+            "hello": "",
+            "thanks": "",
+            "ref_code": "",
+        }
+
+    if not isinstance(item, dict):
+
+        return None
+
+    email = normalize_email(
+        item.get("email", "")
+    )
+
+    name = str(
+        item.get("name", "")
+        or ""
+    ).strip()
+
+    hi = str(
+        item.get("hi", "")
+        or ""
+    ).strip()
+
+    hello = str(
+        item.get("hello", "")
+        or ""
+    ).strip()
+
+    thanks = str(
+        item.get("thanks", "")
+        or ""
+    ).strip()
+
+    ref_code = str(
+        item.get("ref_code", "")
+        or ""
+    ).strip()
+
+    name = (
+        name
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+    hi = (
+        hi
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+    hello = (
+        hello
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+    thanks = (
+        thanks
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+    ref_code = (
+        ref_code
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+
+    return {
+        "email": email,
+        "name": name[:200],
+        "hi": hi[:100],
+        "hello": hello[:100],
+        "thanks": thanks[:100],
+        "ref_code": ref_code[:200],
     }
 
-    .card {
-        padding: 20px;
-    }
-}
+
+# =========================================================
+# SEND BATCH
+# =========================================================
+
+@app.route(
+    "/send-batch",
+    methods=["POST"],
+)
+def send_batch():
+
+    if not authenticated():
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Authentication required.",
+            "login_required":
+                True,
+        }), 401
+
+    data = request.get_json(
+        silent=True
+    )
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Invalid JSON request.",
+        }), 400
+
+    sender_name = clean_header(
+        data.get(
+            "sender_name",
+            "",
+        ),
+        200,
+    )
+
+    gmail = clean_header(
+        data.get(
+            "gmail",
+            "",
+        ),
+        254,
+    )
+
+    app_password = str(
+        data.get(
+            "app_password",
+            "",
+        )
+    ).strip()
+
+    subject = clean_header(
+        data.get(
+            "subject",
+            "",
+        ),
+        998,
+    )
+
+    body = str(
+        data.get(
+            "body",
+            "",
+        )
+    )
+
+    is_html = (
+        data.get(
+            "is_html",
+            False,
+        ) is True
+    )
+
+    recipients = data.get(
+        "recipients",
+        [],
+    )
+
+    turnstile_token = str(
+        data.get(
+            "turnstile_token",
+            "",
+        )
+    ).strip()
+
+    if not sender_name:
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Sender Name is required.",
+        }), 400
+
+    if not valid_email(gmail):
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Enter a valid Gmail address.",
+        }), 400
+
+    if not gmail.lower().endswith(
+        "@gmail.com"
+    ):
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Please use a Gmail address with Gmail SMTP.",
+        }), 400
+
+    if not app_password:
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Google App Password is required.",
+        }), 400
+
+    if not subject:
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Email subject is required.",
+        }), 400
+
+    if not body.strip():
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Message body is required.",
+        }), 400
+
+    if len(body) > 100_000:
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Message body is too large.",
+        }), 400
+
+    if not isinstance(
+        recipients,
+        list,
+    ):
+
+        return jsonify({
+            "success": False,
+            "message":
+                "Invalid recipient list.",
+        }), 400
+
+    clean_recipients = []
+
+    seen = set()
+
+    for item in recipients:
+
+        recipient = normalize_recipient(
+            item
+        )
+
+        if not recipient:
+            continue
+
+        email = recipient["email"]
+
+        if not valid_email(email):
+            continue
+
+        if email in seen:
+            continue
+
+        seen.add(email)
+
+        clean_recipients.append(
+            recipient
+        )
+
+    clean_recipients = (
+        clean_recipients[
+            :MAX_RECIPIENTS
+        ]
+    )
+
+    if not clean_recipients:
+
+        return jsonify({
+            "success": False,
+            "message":
+                "No valid recipients found.",
+        }), 400
+
+    forwarded_for = request.headers.get(
+        "X-Forwarded-For"
+    )
+
+    if forwarded_for:
+
+        remote_ip = (
+            forwarded_for
+            .split(",", 1)[0]
+            .strip()
+        )
+
+    else:
+
+        remote_ip = request.remote_addr
+
+    verified, verify_error = (
+        verify_turnstile(
+            turnstile_token,
+            remote_ip,
+        )
+    )
+
+    if not verified:
+
+        return jsonify({
+            "success": False,
+            "message": verify_error,
+        }), 403
+
+    clean_app_password = re.sub(
+        r"\s+",
+        "",
+        app_password,
+    )
+
+    @stream_with_context
+    def generate():
+
+        total = len(
+            clean_recipients
+        )
+
+        sent_count = 0
+
+        failed_count = 0
+
+        yield (
+            json.dumps(
+                {
+                    "type": "start",
+                    "total": total,
+                    "sent": 0,
+                    "failed": 0,
+                    "remaining": total,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+        context = ssl.create_default_context()
+
+        try:
+
+            with smtplib.SMTP_SSL(
+                SMTP_HOST,
+                SMTP_PORT,
+                context=context,
+                timeout=SMTP_TIMEOUT,
+            ) as server:
+
+                server.ehlo()
+
+                server.login(
+                    gmail,
+                    clean_app_password,
+                )
+
+                for recipient_data in clean_recipients:
+
+                    recipient = recipient_data["email"]
+
+                    try:
+
+                        personalized_subject = personalize_template(
+                            subject,
+                            recipient_data,
+                        )
+
+                        personalized_body = personalize_template(
+                            body,
+                            recipient_data,
+                        )
+
+                        message = build_message(
+                            gmail=gmail,
+                            sender_name=sender_name,
+                            subject=personalized_subject,
+                            body=personalized_body,
+                            is_html=is_html,
+                            recipient=recipient,
+                        )
+
+                        refused = server.sendmail(
+                            gmail,
+                            [recipient],
+                            message.as_string(),
+                        )
+
+                        if refused:
+
+                            failed_count += 1
+
+                            event = {
+                                "type": "progress",
+                                "email": recipient,
+                                "result": "failed",
+                                "error": "SMTP refused recipient.",
+                                "total": total,
+                                "sent": sent_count,
+                                "failed": failed_count,
+                                "remaining": total - sent_count - failed_count,
+                            }
+
+                        else:
+
+                            sent_count += 1
+
+                            event = {
+                                "type": "progress",
+                                "email": recipient,
+                                "result": "sent",
+                                "total": total,
+                                "sent": sent_count,
+                                "failed": failed_count,
+                                "remaining": total - sent_count - failed_count,
+                            }
+
+                        yield (
+                            json.dumps(
+                                event,
+                                ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+
+                        time.sleep(
+                            SEND_DELAY_SECONDS
+                        )
+
+                    except Exception as exc:
+
+                        failed_count += 1
+
+                        yield json.dumps({
+                            "type": "progress",
+                            "email": recipient,
+                            "result": "failed",
+                            "error": str(exc)[:500],
+                            "total": total,
+                            "sent": sent_count,
+                            "failed": failed_count,
+                            "remaining": total - sent_count - failed_count,
+                        }, ensure_ascii=False) + "\n"
+
+        except smtplib.SMTPAuthenticationError:
+
+            yield json.dumps({
+                "type": "error",
+                "message": "Gmail authentication failed. Check Gmail and App Password.",
+                "total": total,
+                "sent": sent_count,
+                "failed": failed_count,
+                "remaining": total - sent_count - failed_count,
+            }, ensure_ascii=False) + "\n"
+
+            return
+
+        except Exception as exc:
+
+            yield json.dumps({
+                "type": "error",
+                "message": f"SMTP Connection error: {str(exc)[:500]}",
+                "total": total,
+                "sent": sent_count,
+                "failed": failed_count,
+                "remaining": total - sent_count - failed_count,
+            }, ensure_ascii=False) + "\n"
+
+            return
+
+        yield (
+            json.dumps(
+                {
+                    "type": "complete",
+                    "success": True,
+                    "message": "Sending completed.",
+                    "total": total,
+                    "sent": sent_count,
+                    "failed": failed_count,
+                    "remaining": total - sent_count - failed_count,
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    response = Response(
+        generate(),
+        content_type=(
+            "application/x-ndjson; "
+            "charset=utf-8"
+        ),
+    )
+
+    response.headers[
+        "Cache-Control"
+    ] = (
+        "no-cache, "
+        "no-store, "
+        "must-revalidate, "
+        "no-transform, "
+        "max-age=0"
+    )
+
+    response.headers[
+        "Pragma"
+    ] = "no-cache"
+
+    response.headers[
+        "Expires"
+    ] = "0"
+
+    response.headers[
+        "X-Accel-Buffering"
+    ] = "no"
+
+    response.headers[
+        "X-Content-Type-Options"
+    ] = "nosniff"
+
+    return response
+
+
+# =========================================================
+# HEALTH
+# =========================================================
+
+@app.route("/health")
+def health():
+
+    return jsonify({
+        "status": "ok",
+        "service": "YATENDRA Mail Console",
+        "mailer": "Gmail SMTP",
+        "send_delay":
+            SEND_DELAY_SECONDS,
+        "max_recipients":
+            MAX_RECIPIENTS,
+        "placeholders": [
+            "{{hi}}",
+            "{{hello}}",
+            "{{thanks}}",
+            "{{name}}",
+            "{{email}}",
+            "{{ref_code}}",
+        ],
+        "authenticated":
+            authenticated(),
+    })
+
+
+# =========================================================
+# LOCAL DEVELOPMENT
+# =========================================================
+
+if __name__ == "__main__":
+
+    app.run(
+        host="0.0.0.0",
+        port=5000,
+        debug=False,
+    )
