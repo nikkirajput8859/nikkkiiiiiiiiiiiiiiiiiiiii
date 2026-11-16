@@ -28,7 +28,6 @@ h3{font-size:15px}.log{height:310px;overflow:auto;border:1px solid #e7ebf3;borde
 .success{color:#16805d}.failure{color:#b53b43}.footnote{font-size:11px;line-height:1.5;color:#778198}
 .login-page{display:grid;place-items:center;padding:20px}.login-card{width:min(420px,100%)}.login-card h1{font-size:25px}.full{width:100%;margin-top:10px}
 @media(max-width:800px){.layout{grid-template-columns:1fr;margin:14px auto}.topbar{padding:18px 20px}.panel{padding:18px}.topbar h1{font-size:20px}}@media(max-width:520px){.field-grid{grid-template-columns:1fr}}
-
 </style>
 </head>
 <body>
@@ -49,7 +48,8 @@ h3{font-size:15px}.log{height:310px;overflow:auto;border:1px solid #e7ebf3;borde
 </form></section>
 <div class="right-stack">
 <section class="panel"><div class="panel-head"><div><h2>♟ Recipients</h2><p class="muted">Paste email addresses separated by commas or new lines</p></div><span id="recipientCount" class="pill">0 found</span></div>
-<label><textarea id="recipients" rows="6" required form="sendForm" placeholder="person@example.com&#10;another@example.com"></textarea></label>
+<label><textarea id="recipients" rows="6" required form="sendForm" placeholder="person@example.com
+another@example.com"></textarea></label>
 <label class="check"><input id="consent" type="checkbox" required form="sendForm"> I confirm these recipients agreed to receive this email.</label></section>
 <section class="panel">
 <div class="panel-head"><div><div class="eyebrow">LIVE STATUS</div><h2>Progress monitor</h2></div><span id="statePill" class="pill">Ready</span></div>
