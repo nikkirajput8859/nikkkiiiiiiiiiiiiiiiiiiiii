@@ -66,7 +66,7 @@ function logLine(message, kind="") { const p=document.createElement("p"); p.clas
 function updateCounts(e) {
   ["total","sent","failed","remaining"].forEach(k=>{if(e[k]!==undefined) $(k).textContent=e[k];});
   const total=Number($("total").textContent)||0, done=(Number($("sent").textContent)||0)+(Number($("failed").textContent)||0);
-  $("progressBar"].style.width=(total?Math.min(100,done/total*100):0)+"%";
+  $("progressBar").style.width=(total?Math.min(100,done/total*100):0)+"%";
 }
 function handleEvent(e) {
   if(stopUi)return; updateCounts(e);
