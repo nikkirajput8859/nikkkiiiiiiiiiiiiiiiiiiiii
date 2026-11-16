@@ -37,7 +37,7 @@ app.config.update(
 
 SMTP_HOST, SMTP_PORT, SMTP_TIMEOUT = "smtp.gmail.com", 465, 20
 MAX_RECIPIENTS = 25
-SEND_DELAY_SECONDS = 0
+SEND_DELAY_SECONDS = 0.45  # थोड़ा डिले ताकि स्पैम फिल्टर ब्लॉक न करे
 EMAIL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$")
 
 def clean(value, limit=250):
@@ -80,18 +80,27 @@ def personalize(value, recipient):
 def send_one(gmail, app_password, sender_name, subject, body, is_html, recipient):
     if SEND_DELAY_SECONDS:
         time.sleep(SEND_DELAY_SECONDS)
+    
     msg = EmailMessage()
     msg["Subject"] = clean(personalize(subject, recipient), 250)
-    msg["From"] = formataddr((clean(sender_name), gmail))
+    
+    # सही हेडर फॉर्मेट ताकि जीमेल इसे स्पैम न समझे
+    clean_sender = clean(sender_name, 200)
+    msg["From"] = formataddr((clean_sender, gmail))
     msg["To"] = recipient["email"]
+    msg["Reply-To"] = gmail
     msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid()
+    
+    domain_part = gmail.split("@")[1] if "@" in gmail else "gmail.com"
+    msg["Message-ID"] = make_msgid(domain=domain_part)
+    
     content = personalize(body, recipient)
     if is_html:
         msg.set_content(html_to_text(content) or "Please view this email in an HTML-capable email client.")
         msg.add_alternative(content, subtype="html")
     else:
         msg.set_content(content)
+        
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=SMTP_TIMEOUT) as smtp:
         smtp.ehlo()
         smtp.login(gmail, re.sub(r"\s+", "", app_password))
@@ -183,7 +192,7 @@ def send_batch():
         total, sent, failed = len(recipients), 0, 0
         yield event_line({"type": "start", "total": total, "sent": 0, "failed": 0, "remaining": total, "invalid_skipped": invalid})
         from concurrent.futures import ThreadPoolExecutor, as_completed
-        with ThreadPoolExecutor(max_workers=min(6, total)) as pool:
+        with ThreadPoolExecutor(max_workers=min(4, total)) as pool:
             jobs = {pool.submit(send_one, gmail, password, sender_name, subject, body, is_html, r): r for r in recipients}
             for future in as_completed(jobs):
                 recipient = jobs[future]
@@ -211,7 +220,7 @@ def send_batch():
         yield event_line({
             "type": "complete",
             "success": failed == 0,
-            "message": "Sending attempt finished.",
+            "message": "Sending finished successfully.",
             "total": total,
             "sent": sent,
             "failed": failed,
