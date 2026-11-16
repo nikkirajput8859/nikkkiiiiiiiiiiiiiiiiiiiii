@@ -1,4 +1,11 @@
-import os, re, ssl, json, hmac, html, time, smtplib
+import os
+import re
+import ssl
+import json
+import hmac
+import html
+import time
+import smtplib
 from pathlib import Path
 from datetime import timedelta
 from email.message import EmailMessage
@@ -9,18 +16,24 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 app = Flask(__name__, template_folder=str(BASE_DIR/"templates"),
             static_folder=str(BASE_DIR/"static"), static_url_path="/static")
 handler = app
+application = app
 
 SESSION_SECRET = os.environ.get("SESSION_SECRET", "").strip()
 LOGIN_PASSWORD = os.environ.get("LOGIN_PASSWORD", "").strip()
+
 if len(SESSION_SECRET) < 32:
     raise RuntimeError("Set SESSION_SECRET to a random value of at least 32 characters.")
 if not LOGIN_PASSWORD:
     raise RuntimeError("Set LOGIN_PASSWORD in Vercel.")
+
 app.secret_key = SESSION_SECRET
-app.config.update(SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True,
-                  SESSION_COOKIE_SAMESITE="Lax",
-                  PERMANENT_SESSION_LIFETIME=timedelta(hours=1),
-                  MAX_CONTENT_LENGTH=1_000_000)
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=1),
+    MAX_CONTENT_LENGTH=1_000_000
+)
 
 SMTP_HOST, SMTP_PORT, SMTP_TIMEOUT = "smtp.gmail.com", 465, 20
 MAX_RECIPIENTS = 25
@@ -43,10 +56,10 @@ def event_line(data):
     return json.dumps(data, ensure_ascii=False) + "\n"
 
 def html_to_text(value):
-    value = re.sub(r"(?i)<\\s*br\\s*/?\\s*>", "\\n", value)
-    value = re.sub(r"(?i)</\\s*(p|div|li|h[1-6])\\s*>", "\\n", value)
+    value = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", value)
+    value = re.sub(r"(?i)</\s*(p|div|li|h[1-6])\s*>", "\n", value)
     value = re.sub(r"<[^>]*>", " ", value)
-    return re.sub(r"\\n{3,}", "\\n\\n", html.unescape(value)).strip()
+    return re.sub(r"\n{3,}", "\n\n", html.unescape(value)).strip()
 
 def normalize_recipient(item):
     if isinstance(item, str):
@@ -61,7 +74,7 @@ def normalize_recipient(item):
 def personalize(value, recipient):
     result = str(value or "")
     for key in ("hi", "hello", "thanks", "name", "email", "ref_code"):
-        result = result.replace("{{"+key+"}}", recipient.get(key, ""))
+        result = result.replace("{{" + key + "}}", recipient.get(key, ""))
     return result
 
 def send_one(gmail, app_password, sender_name, subject, body, is_html, recipient):
@@ -81,7 +94,7 @@ def send_one(gmail, app_password, sender_name, subject, body, is_html, recipient
         msg.set_content(content)
     with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=ssl.create_default_context(), timeout=SMTP_TIMEOUT) as smtp:
         smtp.ehlo()
-        smtp.login(gmail, re.sub(r"\\s+", "", app_password))
+        smtp.login(gmail, re.sub(r"\s+", "", app_password))
         refused = smtp.send_message(msg, from_addr=gmail, to_addrs=[recipient["email"]])
         if refused:
             raise smtplib.SMTPRecipientsRefused(refused)
@@ -112,8 +125,12 @@ def home():
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "smtp": "Gmail SMTP", "max_recipients": MAX_RECIPIENTS,
-                    "send_delay_seconds": SEND_DELAY_SECONDS})
+    return jsonify({
+        "status": "ok",
+        "smtp": "Gmail SMTP",
+        "max_recipients": MAX_RECIPIENTS,
+        "send_delay_seconds": SEND_DELAY_SECONDS
+    })
 
 @app.route("/favicon.ico")
 def favicon():
@@ -137,6 +154,7 @@ def send_batch():
     body = str(data.get("body", ""))
     is_html = data.get("is_html") is True
     incoming = data.get("recipients", [])
+
     if not sender_name or not valid_email(gmail) or not gmail.endswith("@gmail.com"):
         return error("Enter a sender name and valid @gmail.com address.")
     if not password or not subject or not body.strip():
@@ -147,6 +165,7 @@ def send_batch():
         return error("Recipients must be a list.")
     if data.get("consent_confirmed") is not True:
         return error("Confirm recipients have permission to receive this email.")
+
     recipients, seen, invalid = [], set(), 0
     for item in incoming:
         r = normalize_recipient(item)
@@ -162,28 +181,42 @@ def send_batch():
 
     def generate():
         total, sent, failed = len(recipients), 0, 0
-        yield event_line({"type":"start","total":total,"sent":0,"failed":0,"remaining":total,"invalid_skipped":invalid})
+        yield event_line({"type": "start", "total": total, "sent": 0, "failed": 0, "remaining": total, "invalid_skipped": invalid})
         from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=min(6, total)) as pool:
             jobs = {pool.submit(send_one, gmail, password, sender_name, subject, body, is_html, r): r for r in recipients}
             for future in as_completed(jobs):
                 recipient = jobs[future]
                 try:
-                    future.result(); sent += 1
-                    item = {"type":"progress","recipient":recipient["email"],"result":"sent"}
+                    future.result()
+                    sent += 1
+                    item = {"type": "progress", "recipient": recipient["email"], "result": "sent"}
                 except smtplib.SMTPAuthenticationError:
-                    failed += 1; item = {"type":"progress","recipient":recipient["email"],"result":"failed","error":"Gmail authentication failed. Check address and App Password."}
+                    failed += 1
+                    item = {"type": "progress", "recipient": recipient["email"], "result": "failed", "error": "Gmail authentication failed. Check address and App Password."}
                 except smtplib.SMTPRecipientsRefused:
-                    failed += 1; item = {"type":"progress","recipient":recipient["email"],"result":"failed","error":"Gmail refused this recipient."}
+                    failed += 1
+                    item = {"type": "progress", "recipient": recipient["email"], "result": "failed", "error": "Gmail refused this recipient."}
                 except smtplib.SMTPResponseException as exc:
-                    failed += 1; item = {"type":"progress","recipient":recipient["email"],"result":"failed","error":f"SMTP error {exc.smtp_code}: {str(exc.smtp_error)[:200]}"}
+                    failed += 1
+                    item = {"type": "progress", "recipient": recipient["email"], "result": "failed", "error": f"SMTP error {exc.smtp_code}: {str(exc.smtp_error)[:200]}"}
                 except (smtplib.SMTPException, TimeoutError, OSError) as exc:
-                    failed += 1; item = {"type":"progress","recipient":recipient["email"],"result":"failed","error":f"SMTP/network error: {str(exc)[:200]}"}
+                    failed += 1
+                    item = {"type": "progress", "recipient": recipient["email"], "result": "failed", "error": f"SMTP/network error: {str(exc)[:200]}"}
                 except Exception:
-                    failed += 1; item = {"type":"progress","recipient":recipient["email"],"result":"failed","error":"Unexpected error. Check Vercel logs."}
-                item.update({"total":total,"sent":sent,"failed":failed,"remaining":total-sent-failed})
+                    failed += 1
+                    item = {"type": "progress", "recipient": recipient["email"], "result": "failed", "error": "Unexpected error. Check Vercel logs."}
+                item.update({"total": total, "sent": sent, "failed": failed, "remaining": total - sent - failed})
                 yield event_line(item)
-        yield event_line({"type":"complete","success":failed==0,"message":"Sending attempt finished. SMTP acceptance does not prove Inbox delivery.","total":total,"sent":sent,"failed":failed,"remaining":0})
+        yield event_line({
+            "type": "complete",
+            "success": failed == 0,
+            "message": "Sending attempt finished.",
+            "total": total,
+            "sent": sent,
+            "failed": failed,
+            "remaining": 0
+        })
 
     response = Response(generate(), content_type="application/x-ndjson; charset=utf-8")
     response.headers["Cache-Control"] = "no-store, no-cache, no-transform"
