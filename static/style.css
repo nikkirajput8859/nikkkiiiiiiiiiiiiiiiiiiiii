@@ -1,285 +1,286 @@
-import os
-import re
-import ssl
-import json
-import hmac
-import html
-import time
-import smtplib
-from pathlib import Path
-from datetime import timedelta
-from email.message import EmailMessage
-from email.utils import formataddr, make_msgid, formatdate
-from flask import Flask, request, render_template, redirect, url_for, jsonify, session, Response
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-BASE_DIR = Path(__file__).resolve().parent.parent
-app = Flask(
-    __name__,
-    template_folder=str(BASE_DIR / "templates"),
-    static_folder=str(BASE_DIR / "static"),
-    static_url_path="/static",
-)
-handler = app
-application = app
+:root {
+  --bg: #f4f7fb;
+  --panel: #fff;
+  --line: #d9e2ef;
+  --text: #071a38;
+  --muted: #71829e;
+  --blue: #3978ff;
+  --green: #09b781;
+  --red: #ff6269;
+  --orange: #f59e0b;
+}
 
-SESSION_SECRET = os.environ.get("SESSION_SECRET", "").strip()
-LOGIN_PASSWORD = os.environ.get("LOGIN_PASSWORD", "").strip()
+* { box-sizing: border-box; }
 
-if len(SESSION_SECRET) < 32:
-    raise RuntimeError("Set SESSION_SECRET to a random value of at least 32 characters.")
-if not LOGIN_PASSWORD:
-    raise RuntimeError("Set LOGIN_PASSWORD in Vercel.")
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px Inter, Arial, sans-serif;
+}
 
-app.secret_key = SESSION_SECRET
-app.config.update(
-    SESSION_COOKIE_SECURE=True,
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-    PERMANENT_SESSION_LIFETIME=timedelta(hours=1),
-    MAX_CONTENT_LENGTH=1_000_000,
-)
+.topbar {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 22px;
+  gap: 16px;
+}
 
-SMTP_HOST, SMTP_PORT, SMTP_TIMEOUT = "smtp.gmail.com", 465, 20
-MAX_RECIPIENTS = 25
-SEND_DELAY_SECONDS = 0.25
-EMAIL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$")
+.app-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 21px;
+  font-weight: 800;
+}
 
+.plane { font-size: 25px; transform: rotate(-15deg); }
 
-def clean(value, limit=250):
-    return str(value or "").replace("\r", " ").replace("\n", " ").strip()[:limit]
+.logout-btn {
+  color: #315db9;
+  background: #fff;
+  border: 1px solid var(--line);
+  padding: 9px 14px;
+  border-radius: 9px;
+  text-decoration: none;
+  font-weight: 700;
+}
 
+.dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, .93fr);
+  gap: 20px;
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 0 12px 24px;
+  align-items: start;
+}
 
-def valid_email(value):
-    return isinstance(value, str) and len(value.strip()) <= 254 and bool(EMAIL_RE.fullmatch(value.strip()))
+.card {
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid #e1e8f1;
+  border-radius: 12px;
+  padding: 28px;
+  box-shadow: 0 7px 20px rgba(21, 45, 83, .035);
+}
 
+h2 { margin: 0; font-size: 17px; font-weight: 800; }
 
-def logged_in():
-    return session.get("authenticated") is True
+label { display: block; font-weight: 700; margin-bottom: 7px; }
 
+input:not([type="checkbox"]), textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 12px 13px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--text);
+  background: #fff;
+  font: inherit;
+}
 
-def error(message, status=400):
-    return jsonify({"success": False, "message": message}), status
+input:focus, textarea:focus {
+  outline: 2px solid #dce7ff;
+  border-color: #8aabff;
+}
 
+input:disabled { background: #f5f7fb; color: var(--muted); }
 
-def event_line(data):
-    return json.dumps(data, ensure_ascii=False) + "\n"
+.two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 17px 14px;
+}
 
+.two-col small, .recipients-card > small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 5px;
+}
 
-def html_to_text(value):
-    value = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", value)
-    value = re.sub(r"(?i)</\s*(p|div|li|h[1-6])\s*>", "\n", value)
-    value = re.sub(r"<[^>]*>", " ", value)
-    return re.sub(r"\n{3,}", "\n\n", html.unescape(value)).strip()
+.password-wrap { position: relative; }
+.password-wrap input { padding-right: 42px; }
+.password-wrap button {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 5px;
+}
 
+.body-heading {
+  margin-top: 17px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
 
-def normalize_recipient(item):
-    if isinstance(item, str):
-        item = {"email": item}
-    if not isinstance(item, dict):
-        return None
-    address = str(item.get("email", "")).strip().lower()
-    if not valid_email(address):
-        return None
-    return {
-        "email": address,
-        **{k: clean(item.get(k, ""), 150) for k in ("name", "hi", "hello", "thanks", "ref_code")},
-    }
+.mode-switch { display: flex; gap: 5px; }
+.mode {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 9px;
+  color: var(--muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+.mode.active {
+  color: var(--blue);
+  border-color: #cbdcff;
+  background: #eff5ff;
+}
 
+.message-body {
+  height: 264px;
+  margin-top: 5px;
+  resize: vertical;
+  line-height: 1.6;
+}
 
-def personalize(value, recipient):
-    result = str(value or "")
-    for key in ("hi", "hello", "thanks", "name", "email", "ref_code"):
-        result = result.replace("{{" + key + "}}", recipient.get(key, ""))
-    return result
+.info-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 20px;
+  padding: 12px;
+  border: 1px solid #d8e5ff;
+  border-radius: 8px;
+  background: #f6faff;
+  color: #1762d5;
+}
+.shuffle { font-size: 21px; }
+.info-strip strong, .info-strip small { display: block; }
+.info-strip strong { font-size: 11px; }
+.info-strip small { font-size: 10px; color: var(--muted); margin-top: 2px; }
 
+.security-heading { margin: 19px 0 14px; font-size: 13px; }
+.consent-row { display: flex; align-items: flex-start; gap: 8px; }
+.consent-row input { margin-top: 3px; }
+.consent-row label { font-weight: 400; line-height: 1.5; }
+.help-text { color: var(--muted); font-size: 11px; line-height: 1.5; }
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if logged_in():
-        return redirect(url_for("home"))
-    if request.method == "GET":
-        return render_template("login.html", error=None)
-    if not hmac.compare_digest(str(request.form.get("password", "")), LOGIN_PASSWORD):
-        return render_template("login.html", error="Incorrect password."), 401
-    session.clear()
-    session.permanent = True
-    session["authenticated"] = True
-    return redirect(url_for("home"))
+.right-column { display: grid; gap: 20px; }
+.section-heading { display: flex; justify-content: space-between; gap: 12px; }
+.section-heading p { margin: 4px 0 10px 22px; color: var(--muted); font-size: 10px; }
+.badge {
+  align-self: start;
+  background: #f0f5ff;
+  color: var(--blue);
+  border-radius: 20px;
+  padding: 6px 10px;
+  font-size: 9px;
+  white-space: nowrap;
+}
 
+.recipient-input { height: 135px; resize: vertical; }
 
-@app.route("/logout", methods=["GET", "POST"])
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 5px;
+}
+.stat {
+  min-height: 91px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+.stat span { font-size: 9px; color: #607493; font-weight: 600; }
+.stat strong { color: var(--blue); font-size: 24px; }
+.stat strong.green { color: var(--green); }
+.stat strong.red { color: #ff4646; }
+.stat strong.orange { color: var(--orange); }
 
+.progress-track {
+  height: 7px;
+  margin-top: 21px;
+  background: #e2e8f0;
+  border-radius: 20px;
+  overflow: hidden;
+}
+#progressBar {
+  width: 0;
+  height: 100%;
+  background: var(--green);
+  transition: width .2s ease;
+}
+.status { text-align: center; font-weight: 700; margin: 16px 0 22px; }
 
-@app.route("/")
-def home():
-    if not logged_in():
-        return redirect(url_for("login"))
-    return render_template("index.html")
+.action-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.action-row button {
+  border: 0;
+  border-radius: 8px;
+  min-height: 40px;
+  padding: 10px;
+  font: inherit;
+  font-weight: 700;
+  color: white;
+  cursor: pointer;
+}
+.send-btn { background: #09b781; }
+.stop-btn { background: #ff777d; }
+.action-row button:disabled { opacity: .65; cursor: not-allowed; }
 
+.results { margin-top: 12px; max-height: 240px; overflow-y: auto; }
+.result-row {
+  padding: 9px;
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.result-row.sent { color: #087e58; }
+.result-row.failed { color: #c72d38; }
 
-@app.route("/health")
-def health():
-    return jsonify({
-        "status": "ok",
-        "smtp": "Gmail SMTP",
-        "max_recipients": MAX_RECIPIENTS,
-        "send_delay_seconds": SEND_DELAY_SECONDS,
-    })
+.login-page { display: grid; place-items: center; padding: 20px; }
+.login-card {
+  width: min(100%, 430px);
+  background: white;
+  padding: 28px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+.login-card h1 { font-size: 27px; }
+.login-card h1 span { color: var(--blue); }
+.primary-btn {
+  margin-top: 20px;
+  width: 100%;
+  padding: 12px 20px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--blue);
+  color: white;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.error { color: #a51e2b; background: #fff0f1; padding: 12px; border-radius: 8px; }
 
-
-@app.route("/favicon.ico")
-def favicon():
-    return Response("", status=204)
-
-
-@app.route("/sw.js")
-def sw():
-    return Response("", mimetype="application/javascript")
-
-
-@app.route("/send-batch", methods=["POST"])
-def send_batch():
-    if not logged_in():
-        return jsonify({"success": False, "message": "Please log in again.", "login_required": True}), 401
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return error("Invalid JSON request.")
-
-    sender_name = clean(data.get("sender_name", ""))
-    gmail = clean(data.get("gmail", ""), 254).lower()
-    password = str(data.get("app_password", "")).strip()
-    subject = clean(data.get("subject", ""), 250)
-    body = str(data.get("body", ""))
-    is_html = data.get("is_html") is True
-    incoming = data.get("recipients", [])
-
-    if not sender_name or not valid_email(gmail) or not gmail.endswith("@gmail.com"):
-        return error("Enter a sender name and valid @gmail.com address.")
-    if not password or not subject or not body.strip():
-        return error("App Password, subject and body are required.")
-    if len(body) > 100_000:
-        return error("Email body is too large.")
-    if not isinstance(incoming, list):
-        return error("Recipients must be a list.")
-    if data.get("consent_confirmed") is not True:
-        return error("Confirm recipients have permission to receive this email.")
-
-    recipients, seen, invalid = [], set(), 0
-    for item in incoming:
-        r = normalize_recipient(item)
-        if not r:
-            invalid += 1
-        elif r["email"] not in seen:
-            seen.add(r["email"])
-            recipients.append(r)
-
-    if not recipients:
-        return error("No valid recipients found.")
-    if len(recipients) > MAX_RECIPIENTS:
-        return error(f"Maximum {MAX_RECIPIENTS} unique recipients per batch.")
-
-    def generate():
-        total, sent, failed = len(recipients), 0, 0
-        yield event_line({
-            "type": "start",
-            "total": total,
-            "sent": 0,
-            "failed": 0,
-            "remaining": total,
-            "invalid_skipped": invalid,
-        })
-
-        context = ssl.create_default_context()
-        try:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=SMTP_TIMEOUT) as smtp:
-                smtp.ehlo()
-                smtp.login(gmail, re.sub(r"\s+", "", password))
-
-                for r in recipients:
-                    try:
-                        if SEND_DELAY_SECONDS:
-                            time.sleep(SEND_DELAY_SECONDS)
-
-                        msg = EmailMessage()
-                        msg["Subject"] = clean(personalize(subject, r), 250)
-                        msg["From"] = formataddr((clean(sender_name, 200), gmail))
-                        msg["To"] = r["email"]
-                        msg["Date"] = formatdate(localtime=True)
-                        domain_part = gmail.split("@")[1] if "@" in gmail else "gmail.com"
-                        msg["Message-ID"] = make_msgid(domain=domain_part)
-
-                        content = personalize(body, r)
-                        if is_html:
-                            msg.set_content(html_to_text(content) or "Please view this email in an HTML-capable email client.")
-                            msg.add_alternative(content, subtype="html")
-                        else:
-                            msg.set_content(content)
-
-                        refused = smtp.send_message(msg, from_addr=gmail, to_addrs=[r["email"]])
-                        if refused:
-                            failed += 1
-                            item = {
-                                "type": "progress",
-                                "recipient": r["email"],
-                                "result": "failed",
-                                "error": "Recipient refused by SMTP server.",
-                            }
-                        else:
-                            sent += 1
-                            item = {
-                                "type": "progress",
-                                "recipient": r["email"],
-                                "result": "sent",
-                            }
-                    except Exception as exc:
-                        failed += 1
-                        item = {
-                            "type": "progress",
-                            "recipient": r["email"],
-                            "result": "failed",
-                            "error": str(exc)[:200],
-                        }
-
-                    item.update({
-                        "total": total,
-                        "sent": sent,
-                        "failed": failed,
-                        "remaining": total - sent - failed,
-                    })
-                    yield event_line(item)
-
-        except smtplib.SMTPAuthenticationError:
-            yield event_line({
-                "type": "error",
-                "message": "Gmail authentication failed. Check your Gmail address and 16-character App Password.",
-            })
-            return
-        except Exception as exc:
-            yield event_line({
-                "type": "error",
-                "message": f"SMTP connection error: {str(exc)[:200]}",
-            })
-            return
-
-        yield event_line({
-            "type": "complete",
-            "success": failed == 0,
-            "message": "Batch sending finished.",
-            "total": total,
-            "sent": sent,
-            "failed": failed,
-            "remaining": 0,
-        })
-
-    response = Response(generate(), content_type="application/x-ndjson; charset=utf-8")
-    response.headers["Cache-Control"] = "no-store, no-cache, no-transform"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Accel-Buffering"] = "no"
-    return response
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+@media (max-width: 850px) {
+  .dashboard { grid-template-columns: 1fr; }
+}
+@media (max-width: 480px) {
+  .topbar { padding: 12px; }
+  .app-title { font-size: 17px; }
+  .card { padding: 18px; }
+  .two-col { grid-template-columns: 1fr; }
+  .message-body { height: 220px; }
+  .action-row { gap: 8px; }
+}
