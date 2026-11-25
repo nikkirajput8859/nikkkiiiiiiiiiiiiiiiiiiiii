@@ -11,6 +11,7 @@ from datetime import timedelta
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid, formatdate
 from flask import Flask, request, render_template, redirect, url_for, jsonify, session, Response
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 app = Flask(
@@ -41,36 +42,30 @@ app.config.update(
 
 SMTP_HOST, SMTP_PORT, SMTP_TIMEOUT = "smtp.gmail.com", 465, 20
 MAX_RECIPIENTS = 25
-SEND_DELAY_SECONDS = 0.25
+SEND_DELAY_SECONDS = 0  # FAST MODE
+MAX_WORKERS = 8  # 8 parallel = fast + Gmail safe
 EMAIL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$")
-
 
 def clean(value, limit=250):
     return str(value or "").replace("\r", " ").replace("\n", " ").strip()[:limit]
 
-
 def valid_email(value):
     return isinstance(value, str) and len(value.strip()) <= 254 and bool(EMAIL_RE.fullmatch(value.strip()))
-
 
 def logged_in():
     return session.get("authenticated") is True
 
-
 def error(message, status=400):
     return jsonify({"success": False, "message": message}), status
 
-
 def event_line(data):
     return json.dumps(data, ensure_ascii=False) + "\n"
-
 
 def html_to_text(value):
     value = re.sub(r"(?i)<\s*br\s*/?\s*>", "\n", value)
     value = re.sub(r"(?i)</\s*(p|div|li|h[1-6])\s*>", "\n", value)
     value = re.sub(r"<[^>]*>", " ", value)
     return re.sub(r"\n{3,}", "\n\n", html.unescape(value)).strip()
-
 
 def normalize_recipient(item):
     if isinstance(item, str):
@@ -85,13 +80,40 @@ def normalize_recipient(item):
         **{k: clean(item.get(k, ""), 150) for k in ("name", "hi", "hello", "thanks", "ref_code")},
     }
 
-
 def personalize(value, recipient):
     result = str(value or "")
     for key in ("hi", "hello", "thanks", "name", "email", "ref_code"):
         result = result.replace("{{" + key + "}}", recipient.get(key, ""))
     return result
 
+def send_one_fast(gmail, password, sender_name, subject, body, is_html, r):
+    # Har thread ka apna connection - fast + no disconnect error
+    msg = EmailMessage()
+    msg["Subject"] = clean(personalize(subject, r), 250)
+    msg["From"] = formataddr((clean(sender_name, 200), gmail))
+    msg["To"] = r["email"]
+    msg["Reply-To"] = gmail
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain="gmail.com")
+    msg["List-Unsubscribe"] = f"<mailto:{gmail}?subject=unsubscribe>"
+    msg["MIME-Version"] = "1.0"
+    msg["X-Mailer"] = "MyApp-Mailer"
+
+    content = personalize(body, r)
+    if is_html:
+        msg.set_content(html_to_text(content) or "Please view this email in an HTML-capable email client.")
+        msg.add_alternative(content, subtype="html")
+    else:
+        msg.set_content(content)
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=SMTP_TIMEOUT) as smtp:
+        smtp.ehlo()
+        smtp.login(gmail, re.sub(r"\s+", "", password))
+        refused = smtp.send_message(msg, from_addr=gmail, to_addrs=[r["email"]])
+        if refused:
+            raise smtplib.SMTPRecipientsRefused(refused)
+    return True
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -106,19 +128,16 @@ def login():
     session["authenticated"] = True
     return redirect(url_for("home"))
 
-
 @app.route("/logout", methods=["GET", "POST"])
 def logout():
     session.clear()
     return redirect(url_for("login"))
-
 
 @app.route("/")
 def home():
     if not logged_in():
         return redirect(url_for("login"))
     return render_template("index.html")
-
 
 @app.route("/health")
 def health():
@@ -127,18 +146,16 @@ def health():
         "smtp": "Gmail SMTP",
         "max_recipients": MAX_RECIPIENTS,
         "send_delay_seconds": SEND_DELAY_SECONDS,
+        "workers": MAX_WORKERS,
     })
-
 
 @app.route("/favicon.ico")
 def favicon():
     return Response("", status=204)
 
-
 @app.route("/sw.js")
 def sw():
     return Response("", mimetype="application/javascript")
-
 
 @app.route("/send-batch", methods=["POST"])
 def send_batch():
@@ -192,56 +209,30 @@ def send_batch():
             "invalid_skipped": invalid,
         })
 
-        context = ssl.create_default_context()
         try:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=SMTP_TIMEOUT) as smtp:
-                smtp.ehlo()
-                smtp.login(gmail, re.sub(r"\s+", "", password))
-
-                for r in recipients:
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total)) as pool:
+                jobs = {pool.submit(send_one_fast, gmail, password, sender_name, subject, body, is_html, r): r for r in recipients}
+                for future in as_completed(jobs):
+                    r = jobs[future]
                     try:
-                        if SEND_DELAY_SECONDS:
-                            time.sleep(SEND_DELAY_SECONDS)
-
-                        msg = EmailMessage()
-                        msg["Subject"] = clean(personalize(subject, r), 250)
-                        msg["From"] = formataddr((clean(sender_name, 200), gmail))
-                        msg["To"] = r["email"]
-                        msg["Date"] = formatdate(localtime=True)
-                        domain_part = gmail.split("@")[1] if "@" in gmail else "gmail.com"
-                        msg["Message-ID"] = make_msgid(domain=domain_part)
-
-                        content = personalize(body, r)
-                        if is_html:
-                            msg.set_content(html_to_text(content) or "Please view this email in an HTML-capable email client.")
-                            msg.add_alternative(content, subtype="html")
-                        else:
-                            msg.set_content(content)
-
-                        refused = smtp.send_message(msg, from_addr=gmail, to_addrs=[r["email"]])
-                        if refused:
-                            failed += 1
-                            item = {
-                                "type": "progress",
-                                "recipient": r["email"],
-                                "result": "failed",
-                                "error": "Recipient refused by SMTP server.",
-                            }
-                        else:
-                            sent += 1
-                            item = {
-                                "type": "progress",
-                                "recipient": r["email"],
-                                "result": "sent",
-                            }
+                        future.result()
+                        sent += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "sent"}
+                    except smtplib.SMTPAuthenticationError:
+                        failed += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": "Gmail authentication failed. Check address and App Password."}
+                    except smtplib.SMTPRecipientsRefused:
+                        failed += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": "Gmail refused this recipient."}
+                    except smtplib.SMTPResponseException as exc:
+                        failed += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": f"SMTP error {exc.smtp_code}: {str(exc.smtp_error)[:200]}"}
+                    except (smtplib.SMTPException, TimeoutError, OSError) as exc:
+                        failed += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": f"SMTP/network error: {str(exc)[:200]}"}
                     except Exception as exc:
                         failed += 1
-                        item = {
-                            "type": "progress",
-                            "recipient": r["email"],
-                            "result": "failed",
-                            "error": str(exc)[:200],
-                        }
+                        item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": str(exc)[:200]}
 
                     item.update({
                         "total": total,
@@ -250,18 +241,8 @@ def send_batch():
                         "remaining": total - sent - failed,
                     })
                     yield event_line(item)
-
-        except smtplib.SMTPAuthenticationError:
-            yield event_line({
-                "type": "error",
-                "message": "Gmail authentication failed. Check your Gmail address and 16-character App Password.",
-            })
-            return
         except Exception as exc:
-            yield event_line({
-                "type": "error",
-                "message": f"SMTP connection error: {str(exc)[:200]}",
-            })
+            yield event_line({"type": "error", "message": f"SMTP connection error: {str(exc)[:200]}"})
             return
 
         yield event_line({
@@ -279,7 +260,6 @@ def send_batch():
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Accel-Buffering"] = "no"
     return response
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)
