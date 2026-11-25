@@ -12,6 +12,7 @@ from datetime import timedelta
 from email.message import EmailMessage
 from email.utils import formataddr, make_msgid, formatdate
 from flask import Flask, request, render_template, redirect, url_for, jsonify, session, Response
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 app = Flask(
@@ -41,8 +42,9 @@ app.config.update(
 )
 
 SMTP_HOST, SMTP_PORT, SMTP_TIMEOUT = "smtp.gmail.com", 465, 30
-MAX_RECIPIENTS = 10  # Inbox ke liye 10 hi rakho, 25 mat bhejo
-SEND_DELAY_SECONDS = 3  # INBOX MODE - 3 sec gap zaroori hai
+MAX_RECIPIENTS = 25
+SEND_DELAY_SECONDS = 0.8  # Fast + Inbox balance
+MAX_WORKERS = 3  # 3 parallel = fast + Gmail safe, 8 mat rakhna
 EMAIL_RE = re.compile(r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$")
 
 def clean(value, limit=250):
@@ -85,6 +87,36 @@ def personalize(value, recipient):
         result = result.replace("{{" + key + "}}", recipient.get(key, ""))
     return result
 
+def send_one_inbox_fast(gmail, password, sender_name, subject, body, is_html, r):
+    # Har thread apna alag connection + thoda human gap
+    time.sleep(random.uniform(0.5, 1.2))
+
+    msg = EmailMessage()
+    msg["Subject"] = clean(personalize(subject, r), 250)
+    msg["From"] = formataddr((clean(sender_name, 200), gmail))
+    msg["To"] = r["email"]
+    msg["Reply-To"] = gmail
+    msg["Date"] = formatdate(localtime=True)
+    msg["Message-ID"] = make_msgid(domain="gmail.com")
+    msg["MIME-Version"] = "1.0"
+    # List-Unsubscribe / X-Mailer hata diya - yahi inbox ka trick hai
+
+    content = personalize(body, r)
+    if is_html:
+        msg.set_content(html_to_text(content) or "Please view this email in an HTML-capable email client.")
+        msg.add_alternative(content, subtype="html")
+    else:
+        msg.set_content(content)
+
+    context = ssl.create_default_context()
+    with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=SMTP_TIMEOUT) as smtp:
+        smtp.ehlo()
+        smtp.login(gmail, re.sub(r"\s+", "", password))
+        refused = smtp.send_message(msg, from_addr=gmail, to_addrs=[r["email"]])
+        if refused:
+            raise smtplib.SMTPRecipientsRefused(refused)
+    return True
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if logged_in():
@@ -113,9 +145,10 @@ def home():
 def health():
     return jsonify({
         "status": "ok",
-        "smtp": "Gmail SMTP - INBOX MODE",
+        "smtp": "Gmail SMTP - FAST + INBOX",
         "max_recipients": MAX_RECIPIENTS,
         "send_delay_seconds": SEND_DELAY_SECONDS,
+        "workers": MAX_WORKERS,
     })
 
 @app.route("/favicon.ico")
@@ -165,7 +198,7 @@ def send_batch():
     if not recipients:
         return error("No valid recipients found.")
     if len(recipients) > MAX_RECIPIENTS:
-        return error(f"Maximum {MAX_RECIPIENTS} unique recipients per batch. Inbox ke liye 10 hi bhejo.")
+        return error(f"Maximum {MAX_RECIPIENTS} unique recipients per batch.")
 
     def generate():
         total, sent, failed = len(recipients), 0, 0
@@ -178,52 +211,33 @@ def send_batch():
             "invalid_skipped": invalid,
         })
 
-        context = ssl.create_default_context()
         try:
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context, timeout=SMTP_TIMEOUT) as smtp:
-                smtp.ehlo()
-                smtp.login(gmail, re.sub(r"\s+", "", password))
-
-                for r in recipients:
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total)) as pool:
+                jobs = {pool.submit(send_one_inbox_fast, gmail, password, sender_name, subject, body, is_html, r): r for r in recipients}
+                for future in as_completed(jobs):
+                    r = jobs[future]
                     try:
-                        # Har mail ke beech human jaisa gap
-                        time.sleep(SEND_DELAY_SECONDS + random.uniform(0, 1))
-
-                        msg = EmailMessage()
-                        # Subject ko personal banao - same subject sabko = spam
-                        msg["Subject"] = clean(personalize(subject, r), 250)
-                        msg["From"] = formataddr((clean(sender_name, 200), gmail))
-                        msg["To"] = r["email"]
-                        msg["Reply-To"] = gmail
-                        msg["Date"] = formatdate(localtime=True)
-                        msg["Message-ID"] = make_msgid(domain="gmail.com")
-                        # Bulk wale header hata diye - yahi inbox ka main trick hai
-
-                        content = personalize(body, r)
-                        if is_html:
-                            # HTML ke saath plain text bhi - Gmail ko ye pasand hai
-                            msg.set_content(html_to_text(content) or "Please view this email in an HTML-capable email client.")
-                            msg.add_alternative(content, subtype="html")
-                        else:
-                            msg.set_content(content)
-
-                        refused = smtp.send_message(msg, from_addr=gmail, to_addrs=[r["email"]])
-                        if refused:
-                            failed += 1
-                            item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": "Recipient refused by SMTP server."}
-                        else:
-                            sent += 1
-                            item = {"type": "progress", "recipient": r["email"], "result": "sent"}
+                        future.result()
+                        sent += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "sent"}
+                    except smtplib.SMTPAuthenticationError:
+                        failed += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": "Gmail authentication failed. Check address and App Password."}
+                    except smtplib.SMTPRecipientsRefused:
+                        failed += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": "Gmail refused this recipient."}
+                    except smtplib.SMTPResponseException as exc:
+                        failed += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": f"SMTP error {exc.smtp_code}: {str(exc.smtp_error)[:200]}"}
+                    except (smtplib.SMTPException, TimeoutError, OSError) as exc:
+                        failed += 1
+                        item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": f"SMTP/network error: {str(exc)[:200]}"}
                     except Exception as exc:
                         failed += 1
                         item = {"type": "progress", "recipient": r["email"], "result": "failed", "error": str(exc)[:200]}
 
                     item.update({"total": total, "sent": sent, "failed": failed, "remaining": total - sent - failed})
                     yield event_line(item)
-
-        except smtplib.SMTPAuthenticationError:
-            yield event_line({"type": "error", "message": "Gmail authentication failed. Check your Gmail address and 16-character App Password."})
-            return
         except Exception as exc:
             yield event_line({"type": "error", "message": f"SMTP connection error: {str(exc)[:200]}"})
             return
